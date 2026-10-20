@@ -39,7 +39,7 @@ func run(logger *slog.Logger) error {
 
 	srv := &http.Server{
 		Addr:              addr,
-		Handler:           newRouter(pool),
+		Handler:           withRequestLogging(logger, newRouter(pool)),
 		ReadHeaderTimeout: 5 * time.Second,
 		ReadTimeout:       10 * time.Second,
 		WriteTimeout:      10 * time.Second,
@@ -87,6 +87,7 @@ func handleHealthz(db pinger) http.HandlerFunc {
 
 		w.Header().Set("Content-Type", "application/json")
 		if err := db.Ping(ctx); err != nil {
+			loggerFrom(r.Context()).Warn("database ping failed", "error", err)
 			w.WriteHeader(http.StatusServiceUnavailable)
 			_ = json.NewEncoder(w).Encode(map[string]string{"status": "unavailable", "database": "down"})
 			return
