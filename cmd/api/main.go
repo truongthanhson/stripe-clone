@@ -13,6 +13,8 @@ import (
 	"time"
 
 	"github.com/jackc/pgx/v5/pgxpool"
+
+	"github.com/truongthanhson/stripe-clone/internal/apikey"
 )
 
 func main() {
@@ -39,7 +41,7 @@ func run(logger *slog.Logger) error {
 
 	srv := &http.Server{
 		Addr:              addr,
-		Handler:           withRequestLogging(logger, newRouter(pool)),
+		Handler:           withRequestLogging(logger, newRouter(pool, apikey.NewStore(pool))),
 		ReadHeaderTimeout: 5 * time.Second,
 		ReadTimeout:       10 * time.Second,
 		WriteTimeout:      10 * time.Second,
@@ -74,10 +76,21 @@ type pinger interface {
 	Ping(ctx context.Context) error
 }
 
-func newRouter(db pinger) http.Handler {
+func newRouter(db pinger, keys keyLookup) http.Handler {
 	mux := http.NewServeMux()
 	mux.HandleFunc("GET /healthz", handleHealthz(db))
+	mux.Handle("GET /v1/account", requireAPIKey(keys, http.HandlerFunc(handleAccount)))
 	return mux
+}
+
+func handleAccount(w http.ResponseWriter, r *http.Request) {
+	p := principalFrom(r.Context())
+	w.Header().Set("Content-Type", "application/json")
+	_ = json.NewEncoder(w).Encode(map[string]any{
+		"object":   "account",
+		"id":       p.MerchantID,
+		"livemode": p.Livemode(),
+	})
 }
 
 func handleHealthz(db pinger) http.HandlerFunc {

@@ -12,6 +12,14 @@ go run ./cmd/api                                                       # listens
 curl localhost:8080/healthz                                            # 200 when the DB is up, 503 when down
 ```
 
+## API keys
+
+```sh
+go run ./cmd/admin create-merchant -name Acme -email ops@acme.test    # prints the merchant id
+go run ./cmd/admin issue-key -merchant 1 -mode test                    # prints sk_test_... once; only its hash is stored
+curl -H "Authorization: Bearer sk_test_..." localhost:8080/v1/account
+```
+
 ## Test
 
 ```sh
