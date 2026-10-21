@@ -1,0 +1,5 @@
+# Caddy gets a Let's Encrypt certificate for DOMAIN automatically; for "localhost" it uses its own local CA.
+{$DOMAIN} {
+	encode zstd gzip
+	reverse_proxy api:8080
+}
