@@ -158,3 +158,43 @@ func TestFakeCaptureAndVoid(t *testing.T) {
 		t.Fatalf("stats = %+v, want 1600 captured over 2 holds", s)
 	}
 }
+
+func TestFakeRefund(t *testing.T) {
+	ctx := context.Background()
+	f := NewFake()
+	capture := func(ref, pm string) string {
+		t.Helper()
+		auth, _ := f.Authorize(ctx, AuthorizeRequest{Reference: ref, Card: card(t, pm), Amount: 1000, Currency: "usd"})
+		if err := f.Capture(ctx, auth.ID, 1000); err != nil {
+			t.Fatal(err)
+		}
+		return auth.ID
+	}
+	id := capture("r1", "pm_card_visa")
+
+	if err := f.Refund(ctx, RefundRequest{Reference: "re_1", AuthorizationID: id, Amount: 600}); err != nil {
+		t.Fatal(err)
+	}
+	if err := f.Refund(ctx, RefundRequest{Reference: "re_1", AuthorizationID: id, Amount: 600}); err != nil {
+		t.Fatalf("retried refund: %v", err)
+	}
+	if err := f.Refund(ctx, RefundRequest{Reference: "re_2", AuthorizationID: id, Amount: 401}); !errors.Is(err, ErrInvalidState) {
+		t.Fatalf("over-refund err = %v", err)
+	}
+	if err := f.Refund(ctx, RefundRequest{Reference: "re_3", AuthorizationID: id, Amount: 400}); err != nil {
+		t.Fatal(err)
+	}
+	if s := f.Stats(); s.Refunded != 1000 {
+		t.Fatalf("refunded %d, want 1000 (the retry must not count twice)", s.Refunded)
+	}
+
+	failing := capture("r2", "pm_card_refundFail")
+	if err := f.Refund(ctx, RefundRequest{Reference: "re_4", AuthorizationID: failing, Amount: 100}); !errors.Is(err, ErrRefundFailed) {
+		t.Fatalf("refund_fail card err = %v", err)
+	}
+
+	auth, _ := f.Authorize(ctx, AuthorizeRequest{Reference: "r3", Card: card(t, "pm_card_visa"), Amount: 1000, Currency: "usd"})
+	if err := f.Refund(ctx, RefundRequest{Reference: "re_5", AuthorizationID: auth.ID, Amount: 100}); !errors.Is(err, ErrInvalidState) {
+		t.Fatalf("refund before capture err = %v", err)
+	}
+}

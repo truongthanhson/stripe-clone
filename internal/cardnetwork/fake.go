@@ -27,8 +27,10 @@ const (
 
 type hold struct {
 	auth     Authorization
+	card     string
 	amount   int64
 	captured int64
+	refunded int64
 	state    holdState
 }
 
@@ -38,17 +40,20 @@ type hold struct {
 // their decline code; CardTimeoutAfterApprove approves on the network side and then blocks until
 // the caller's context ends, returning ErrTimeout, the worst case for a payment system: money held,
 // answer lost. Retrying Authorize with the same Reference returns the original authorization.
+// CardRefundFails captures normally but refuses every refund. Holds live in memory only, so a
+// restart forgets them.
 type Fake struct {
 	mu             sync.Mutex
 	byReference    map[string]*hold
 	byID           map[string]*hold
+	refunds        map[string]int64 // amount by refund reference
 	authorizeCalls int
 }
 
 var _ Network = (*Fake)(nil)
 
 func NewFake() *Fake {
-	return &Fake{byReference: map[string]*hold{}, byID: map[string]*hold{}}
+	return &Fake{byReference: map[string]*hold{}, byID: map[string]*hold{}, refunds: map[string]int64{}}
 }
 
 func (f *Fake) Authorize(ctx context.Context, req AuthorizeRequest) (Authorization, error) {
@@ -56,7 +61,7 @@ func (f *Fake) Authorize(ctx context.Context, req AuthorizeRequest) (Authorizati
 	f.authorizeCalls++
 	h, seen := f.byReference[req.Reference]
 	if !seen {
-		h = &hold{auth: Authorization{ID: "auth_" + rand.Text(), Approved: true}, amount: req.Amount}
+		h = &hold{auth: Authorization{ID: "auth_" + rand.Text(), Approved: true}, card: req.Card.Number, amount: req.Amount}
 		if code, declined := declineCodes[req.Card.Number]; declined {
 			h.auth.Approved, h.auth.DeclineCode = false, code
 		}
@@ -103,12 +108,36 @@ func (f *Fake) Void(_ context.Context, authorizationID string) error {
 	return nil
 }
 
+func (f *Fake) Refund(_ context.Context, req RefundRequest) error {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	if amount, seen := f.refunds[req.Reference]; seen {
+		if amount != req.Amount {
+			return fmt.Errorf("%w: refund %s already made for %d", ErrInvalidState, req.Reference, amount)
+		}
+		return nil
+	}
+	h, ok := f.byID[req.AuthorizationID]
+	switch {
+	case !ok:
+		return ErrUnknownAuthorization
+	case h.state != holdCaptured || req.Amount <= 0 || h.refunded+req.Amount > h.captured:
+		return fmt.Errorf("%w: refund %d of %d captured, %d already refunded", ErrInvalidState, req.Amount, h.captured, h.refunded)
+	case h.card == CardRefundFails:
+		return ErrRefundFailed
+	}
+	h.refunded += req.Amount
+	f.refunds[req.Reference] = req.Amount
+	return nil
+}
+
 // Stats is what tests assert on: how much money actually moved on the network.
 type Stats struct {
 	AuthorizeCalls int   // every call, including retries
 	Holds          int   // distinct approved authorizations
 	Captured       int64 // total captured amount across all holds
 	Captures       int   // holds that were captured
+	Refunded       int64 // total refunded across all holds
 }
 
 func (f *Fake) Stats() Stats {
@@ -122,6 +151,7 @@ func (f *Fake) Stats() Stats {
 		if h.state == holdCaptured {
 			s.Captures++
 			s.Captured += h.captured
+			s.Refunded += h.refunded
 		}
 	}
 	return s

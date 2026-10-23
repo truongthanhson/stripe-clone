@@ -19,6 +19,7 @@ import (
 	"github.com/truongthanhson/stripe-clone/internal/idempotency"
 	"github.com/truongthanhson/stripe-clone/internal/ledger"
 	"github.com/truongthanhson/stripe-clone/internal/paymentintent"
+	"github.com/truongthanhson/stripe-clone/internal/refund"
 )
 
 func main() {
@@ -47,6 +48,9 @@ func run(logger *slog.Logger) error {
 	}
 	defer pool.Close()
 
+	// The in-process fake is the only card network until a processor adapter exists; live mode
+	// refuses to confirm, so it only ever moves test money.
+	network := cardnetwork.NewFake()
 	idem := idempotency.NewStore(pool)
 	go pruneIdempotencyKeys(logger, idem)
 
@@ -55,7 +59,8 @@ func run(logger *slog.Logger) error {
 		Handler: withRequestLogging(logger, newRouter(app{
 			db:       pool,
 			keys:     apikey.NewStore(pool),
-			intents:  paymentintent.NewService(paymentintent.NewStore(pool), cardnetwork.NewFake(), networkTimeout, logger),
+			intents:  paymentintent.NewService(paymentintent.NewStore(pool), network, networkTimeout, logger),
+			refunds:  refund.NewService(pool, network, networkTimeout, logger),
 			balances: ledger.NewReader(pool),
 			idem:     idem,
 		})),
@@ -111,6 +116,7 @@ type app struct {
 	keys     keyLookup
 	intents  intentStore
 	balances balanceStore
+	refunds  refundStore
 	idem     idempotencyStore // nil disables Idempotency-Key handling
 }
 
@@ -141,6 +147,9 @@ func routes(a app) []route {
 		{"POST /v1/payment_intents/{id}/confirm", authedPost(handleConfirmIntent(a.intents))},
 		{"POST /v1/payment_intents/{id}/capture", authedPost(handleCaptureIntent(a.intents))},
 		{"POST /v1/payment_intents/{id}/cancel", authedPost(handleCancelIntent(a.intents))},
+		{"POST /v1/refunds", authedPost(handleCreateRefund(a.refunds))},
+		{"GET /v1/refunds", authed(handleListRefunds(a.refunds))},
+		{"GET /v1/refunds/{id}", authed(handleGetRefund(a.refunds))},
 		{"GET /v1/balance", authed(handleGetBalance(a.balances))},
 		{"GET /v1/balance_transactions", authed(handleListBalanceTransactions(a.balances))},
 		{"GET /v1/balance_transactions/{id}", authed(handleGetBalanceTransaction(a.balances))},

@@ -62,6 +62,13 @@ curl localhost:8080/v1/balance -H "Authorization: Bearer sk_test_..."           
 curl localhost:8080/v1/balance_transactions -H "Authorization: Bearer sk_test_..."    # one per charge: amount, fee, net, source
 ```
 
+Refund all or part of a succeeded payment; partial refunds can never add up to more than was received:
+
+```sh
+curl localhost:8080/v1/refunds -H "Authorization: Bearer sk_test_..." -d payment_intent=pi_... -d amount=500
+curl "localhost:8080/v1/refunds?payment_intent=pi_..." -H "Authorization: Bearer sk_test_..."
+```
+
 A declined card returns `402` with `{"error": {"type": "card_error", "code": "card_declined", "decline_code": ..., "payment_intent": {...}}}`;
 the PaymentIntent goes back to `requires_payment_method` and can be confirmed again with another card.
 
@@ -84,6 +91,7 @@ from the card behind it.
 | `pm_card_chargeDeclinedIncorrectCvc` | Declined, `incorrect_cvc` |
 | `pm_card_chargeDeclinedProcessingError` | Declined, `processing_error` |
 | `pm_card_timeout` | The network approves but its answer never arrives (outcome unknown) |
+| `pm_card_refundFail` | Charges normally; every refund is refused by the issuer |
 
 ## API versions
 

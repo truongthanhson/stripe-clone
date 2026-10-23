@@ -47,7 +47,7 @@ func (s *Store) Create(ctx context.Context, merchantID int64, livemode bool, p C
 	if err := p.Validate(); err != nil {
 		return PaymentIntent{}, err
 	}
-	metadata, err := p.Metadata.Apply(nil)
+	md, err := p.Metadata.Apply(nil)
 	if err != nil {
 		return PaymentIntent{}, err
 	}
@@ -55,7 +55,7 @@ func (s *Store) Create(ctx context.Context, merchantID int64, livemode bool, p C
 		INSERT INTO payment_intents (id, merchant_id, livemode, amount, currency, status, capture_method, description, payment_method, metadata)
 		VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10)
 		RETURNING `+columns,
-		NewID(), merchantID, livemode, p.Amount, p.Currency, p.InitialStatus(), p.CaptureMethod, p.Description, p.PaymentMethod, metadata,
+		NewID(), merchantID, livemode, p.Amount, p.Currency, p.InitialStatus(), p.CaptureMethod, p.Description, p.PaymentMethod, md,
 	))
 }
 
@@ -73,16 +73,16 @@ func (s *Store) Update(ctx context.Context, merchantID int64, livemode bool, id 
 		if err != nil {
 			return err
 		}
-		metadata := pi.Metadata
+		md := pi.Metadata
 		if p.Metadata != nil {
-			if metadata, err = p.Metadata.Apply(pi.Metadata); err != nil {
+			if md, err = p.Metadata.Apply(pi.Metadata); err != nil {
 				return err
 			}
 		}
 		updated, err = scan(tx.QueryRow(ctx,
 			`UPDATE payment_intents SET description = COALESCE($2, description), metadata = $3, updated_at = now()
 			 WHERE id = $1 RETURNING `+columns,
-			id, p.Description, metadata))
+			id, p.Description, md))
 		return err
 	})
 	return updated, err

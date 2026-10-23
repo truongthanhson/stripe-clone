@@ -18,6 +18,7 @@ import (
 	"github.com/truongthanhson/stripe-clone/internal/idempotency"
 	"github.com/truongthanhson/stripe-clone/internal/ledger"
 	"github.com/truongthanhson/stripe-clone/internal/paymentintent"
+	"github.com/truongthanhson/stripe-clone/internal/refund"
 	"github.com/truongthanhson/stripe-clone/internal/testdb"
 )
 
@@ -65,6 +66,7 @@ func newE2EAtVersion(t *testing.T, version string) e2e {
 			db:       pool,
 			keys:     keys,
 			intents:  paymentintent.NewService(paymentintent.NewStore(pool), network, 200*time.Millisecond, logger),
+			refunds:  refund.NewService(pool, network, 200*time.Millisecond, logger),
 			balances: ledger.NewReader(pool),
 			idem:     idempotency.NewStore(pool),
 		})))),

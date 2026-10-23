@@ -31,3 +31,19 @@ func Charge(paymentIntentID string, merchantID int64, livemode bool, currency st
 		Currency: currency, Description: "Payment " + paymentIntentID, Entries: entries,
 	}
 }
+
+// Refund is the posting for money returned to a customer. The merchant's balance pays for it;
+// the fee from the original charge is not returned (Stripe's policy too).
+//
+//	debit  merchant pending    amount
+//	credit network_receivable  amount
+func Refund(refundID string, merchantID int64, livemode bool, currency string, amount int64) Transaction {
+	return Transaction{
+		Type: "refund", SourceID: refundID, MerchantID: merchantID, Livemode: livemode,
+		Currency: currency, Description: "Refund " + refundID,
+		Entries: []Entry{
+			{MerchantPending(merchantID, livemode, currency), amount},
+			{NetworkReceivable(livemode, currency), -amount},
+		},
+	}
+}
