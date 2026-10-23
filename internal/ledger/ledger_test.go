@@ -25,13 +25,19 @@ func TestFee(t *testing.T) {
 }
 
 func TestChargeBalances(t *testing.T) {
-	for _, amount := range []int64{50, 99, 2000, 99_999_999} {
+	for _, amount := range []int64{1, 30, 31, 50, 99, 2000, 99_999_999} {
 		tx := Charge("pi_1", 7, false, "usd", amount)
 		if err := tx.Validate(); err != nil {
 			t.Fatalf("charge of %d: %v", amount, err)
 		}
-		if tx.Entries[1].Amount != -(amount - Fee("usd", amount)) {
-			t.Fatalf("merchant credit = %d", tx.Entries[1].Amount)
+		var merchant int64
+		for _, e := range tx.Entries {
+			if e.Account.Type == Liability {
+				merchant += e.Amount
+			}
+		}
+		if merchant != -(amount - Fee("usd", amount)) {
+			t.Fatalf("charge of %d: merchant credit = %d", amount, merchant)
 		}
 	}
 }

@@ -110,6 +110,8 @@ func testLifecycle(t *testing.T, e e2e) {
 
 		code, over := e.call(t, path(pi.ID, "capture"), e.testKey, url.Values{"amount_to_capture": {"2001"}}, nil)
 		wantError(t, code, over, 400, "amount_too_large")
+		code, under := e.call(t, path(pi.ID, "capture"), e.testKey, url.Values{"amount_to_capture": {"49"}}, nil)
+		wantError(t, code, under, 400, "amount_too_small")
 
 		code, pi = e.call(t, path(pi.ID, "capture"), e.testKey, url.Values{"amount_to_capture": {"1500"}}, nil)
 		wantState(t, code, pi, 200, "succeeded")
