@@ -14,9 +14,9 @@ import (
 // maxBodyBytes bounds a request body; Stripe-style requests are small form posts.
 const maxBodyBytes = 64 << 10
 
-// parseForm reads an application/x-www-form-urlencoded body, as Stripe's API takes, and rejects
-// parameters the endpoint does not know, so a typo fails loudly instead of being ignored.
-func parseForm(w http.ResponseWriter, r *http.Request, allowed ...string) (url.Values, *apiError) {
+// parseForm reads an application/x-www-form-urlencoded body, as Stripe's API takes. Which
+// parameters are allowed is decided earlier, by withRequestValidation from openapi.yaml.
+func parseForm(w http.ResponseWriter, r *http.Request) (url.Values, *apiError) {
 	if ct := r.Header.Get("Content-Type"); ct != "" {
 		mt, _, _ := mime.ParseMediaType(ct)
 		if mt != "application/x-www-form-urlencoded" {
@@ -35,28 +35,7 @@ func parseForm(w http.ResponseWriter, r *http.Request, allowed ...string) (url.V
 		}
 		return nil, &apiError{Type: "invalid_request_error", Code: "parameter_invalid", Message: "The request body could not be parsed."}
 	}
-	form := r.PostForm
-	for name := range form {
-		if !isAllowed(name, allowed) {
-			return nil, &apiError{
-				Type:    "invalid_request_error",
-				Code:    "parameter_unknown",
-				Param:   name,
-				Message: "Received unknown parameter: " + name,
-			}
-		}
-	}
-	return form, nil
-}
-
-// isAllowed accepts an exact name, or name[key] for hash parameters such as metadata[order_id].
-func isAllowed(name string, allowed []string) bool {
-	for _, a := range allowed {
-		if name == a || (strings.HasPrefix(name, a+"[") && strings.HasSuffix(name, "]")) {
-			return true
-		}
-	}
-	return false
+	return r.PostForm, nil
 }
 
 // parseMetadata reads Stripe's hash syntax: metadata[key]=value sets a key, metadata[key]= unsets it,

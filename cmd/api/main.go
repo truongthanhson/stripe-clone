@@ -111,22 +111,41 @@ type app struct {
 	idem    idempotencyStore // nil disables Idempotency-Key handling
 }
 
-func newRouter(a app) http.Handler {
-	authed := func(h http.HandlerFunc) http.Handler { return requireAPIKey(a.keys, h) }
-	authedPost := func(h http.HandlerFunc) http.Handler {
-		return requireAPIKey(a.keys, withIdempotency(a.idem, h))
-	}
+// route is one endpoint. Keeping the table as data lets a test compare it with openapi.yaml.
+type route struct {
+	pattern string // "METHOD /path", as http.ServeMux takes it
+	handler http.Handler
+}
 
+func routes(a app) []route {
+	spec := loadSpec()
+	// Order matters: authenticate, then validate against the spec, then claim the idempotency key,
+	// so a malformed request never stores a response under its key.
+	authed := func(h http.HandlerFunc) http.Handler {
+		return requireAPIKey(a.keys, withRequestValidation(spec, h))
+	}
+	authedPost := func(h http.HandlerFunc) http.Handler {
+		return requireAPIKey(a.keys, withRequestValidation(spec, withIdempotency(a.idem, h)))
+	}
+	return []route{
+		{"GET /healthz", handleHealthz(a.db)},
+		{"GET /openapi.yaml", http.HandlerFunc(handleSpec)},
+		{"GET /v1/account", authed(handleAccount)},
+		{"POST /v1/payment_intents", authedPost(handleCreateIntent(a.intents))},
+		{"GET /v1/payment_intents", authed(handleListIntents(a.intents))},
+		{"GET /v1/payment_intents/{id}", authed(handleGetIntent(a.intents))},
+		{"POST /v1/payment_intents/{id}", authedPost(handleUpdateIntent(a.intents))},
+		{"POST /v1/payment_intents/{id}/confirm", authedPost(handleConfirmIntent(a.intents))},
+		{"POST /v1/payment_intents/{id}/capture", authedPost(handleCaptureIntent(a.intents))},
+		{"POST /v1/payment_intents/{id}/cancel", authedPost(handleCancelIntent(a.intents))},
+	}
+}
+
+func newRouter(a app) http.Handler {
 	mux := http.NewServeMux()
-	mux.HandleFunc("GET /healthz", handleHealthz(a.db))
-	mux.Handle("GET /v1/account", authed(handleAccount))
-	mux.Handle("POST /v1/payment_intents", authedPost(handleCreateIntent(a.intents)))
-	mux.Handle("GET /v1/payment_intents", authed(handleListIntents(a.intents)))
-	mux.Handle("GET /v1/payment_intents/{id}", authed(handleGetIntent(a.intents)))
-	mux.Handle("POST /v1/payment_intents/{id}", authedPost(handleUpdateIntent(a.intents)))
-	mux.Handle("POST /v1/payment_intents/{id}/confirm", authedPost(handleConfirmIntent(a.intents)))
-	mux.Handle("POST /v1/payment_intents/{id}/capture", authedPost(handleCaptureIntent(a.intents)))
-	mux.Handle("POST /v1/payment_intents/{id}/cancel", authedPost(handleCancelIntent(a.intents)))
+	for _, rt := range routes(a) {
+		mux.Handle(rt.pattern, rt.handler)
+	}
 	return mux
 }
 

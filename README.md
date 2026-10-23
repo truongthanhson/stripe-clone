@@ -78,6 +78,12 @@ from the card behind it.
 | `pm_card_chargeDeclinedProcessingError` | Declined, `processing_error` |
 | `pm_card_timeout` | The network approves but its answer never arrives (outcome unknown) |
 
+## API reference
+
+[`openapi/openapi.yaml`](openapi/openapi.yaml) is the source of truth, also served at `GET /openapi.yaml`.
+The server rejects any parameter the spec does not declare, and the tests fail if a route or response
+field exists in code but not in the spec (or the other way round). Change the spec first.
+
 ## Deploy
 
 See [docs/deploy.md](docs/deploy.md): `compose.prod.yaml` runs Postgres, migrations, the API and Caddy (HTTPS) on one VM.

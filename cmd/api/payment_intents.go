@@ -71,7 +71,7 @@ func renderIntent(pi paymentintent.PaymentIntent) intentJSON {
 
 func handleCreateIntent(store intentStore) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
-		form, apiErr := parseForm(w, r, "amount", "currency", "capture_method", "confirm", "description", "metadata", "payment_method")
+		form, apiErr := parseForm(w, r)
 		if apiErr != nil {
 			writeError(w, http.StatusBadRequest, *apiErr)
 			return
@@ -130,7 +130,7 @@ func handleCreateIntent(store intentStore) http.HandlerFunc {
 
 func handleUpdateIntent(store intentStore) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
-		form, apiErr := parseForm(w, r, "description", "metadata")
+		form, apiErr := parseForm(w, r)
 		if apiErr != nil {
 			writeError(w, http.StatusBadRequest, *apiErr)
 			return
@@ -192,7 +192,7 @@ func handleListIntents(store intentStore) http.HandlerFunc {
 
 func handleConfirmIntent(store intentStore) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
-		form, apiErr := parseForm(w, r, "payment_method")
+		form, apiErr := parseForm(w, r)
 		if apiErr != nil {
 			writeError(w, http.StatusBadRequest, *apiErr)
 			return
@@ -209,7 +209,7 @@ func handleConfirmIntent(store intentStore) http.HandlerFunc {
 
 func handleCaptureIntent(store intentStore) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
-		form, apiErr := parseForm(w, r, "amount_to_capture")
+		form, apiErr := parseForm(w, r)
 		if apiErr != nil {
 			writeError(w, http.StatusBadRequest, *apiErr)
 			return
@@ -235,7 +235,7 @@ func handleCaptureIntent(store intentStore) http.HandlerFunc {
 
 func handleCancelIntent(store intentStore) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
-		form, apiErr := parseForm(w, r, "cancellation_reason")
+		form, apiErr := parseForm(w, r)
 		if apiErr != nil {
 			writeError(w, http.StatusBadRequest, *apiErr)
 			return
