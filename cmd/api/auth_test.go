@@ -29,7 +29,7 @@ func TestAccountAuth(t *testing.T) {
 		"sk_test_good": {MerchantID: 7, Mode: apikey.ModeTest},
 		"sk_live_good": {MerchantID: 7, Mode: apikey.ModeLive},
 	}
-	router := newRouter(fakeDB{}, keys)
+	router := newRouter(app{db: fakeDB{}, keys: keys})
 
 	tests := []struct {
 		name         string
@@ -89,7 +89,7 @@ func TestAccountAuth(t *testing.T) {
 
 func TestHealthzNeedsNoKey(t *testing.T) {
 	rec := httptest.NewRecorder()
-	newRouter(fakeDB{}, fakeKeys{}).ServeHTTP(rec, httptest.NewRequest(http.MethodGet, "/healthz", nil))
+	newRouter(app{db: fakeDB{}, keys: fakeKeys{}}).ServeHTTP(rec, httptest.NewRequest(http.MethodGet, "/healthz", nil))
 	if rec.Code != http.StatusOK {
 		t.Fatalf("status = %d, want 200", rec.Code)
 	}

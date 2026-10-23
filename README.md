@@ -20,6 +20,17 @@ go run ./cmd/admin issue-key -merchant 1 -mode test                    # prints 
 curl -H "Authorization: Bearer sk_test_..." localhost:8080/v1/account
 ```
 
+## Payments
+
+Requests use form encoding, like Stripe (`curl -d` sends it). Amounts are integers in the currency's
+smallest unit: `2000` with `usd` is $20.00.
+
+```sh
+curl localhost:8080/v1/payment_intents -H "Authorization: Bearer sk_test_..." \
+  -d amount=2000 -d currency=usd -d description="Order #1"         # returns {"id": "pi_...", "status": "requires_payment_method", ...}
+curl localhost:8080/v1/payment_intents/pi_... -H "Authorization: Bearer sk_test_..."
+```
+
 ## Deploy
 
 See [docs/deploy.md](docs/deploy.md): `compose.prod.yaml` runs Postgres, migrations, the API and Caddy (HTTPS) on one VM.

@@ -15,6 +15,7 @@ import (
 	"github.com/jackc/pgx/v5/pgxpool"
 
 	"github.com/truongthanhson/stripe-clone/internal/apikey"
+	"github.com/truongthanhson/stripe-clone/internal/paymentintent"
 )
 
 func main() {
@@ -40,8 +41,12 @@ func run(logger *slog.Logger) error {
 	defer pool.Close()
 
 	srv := &http.Server{
-		Addr:              addr,
-		Handler:           withRequestLogging(logger, newRouter(pool, apikey.NewStore(pool))),
+		Addr: addr,
+		Handler: withRequestLogging(logger, newRouter(app{
+			db:      pool,
+			keys:    apikey.NewStore(pool),
+			intents: paymentintent.NewStore(pool),
+		})),
 		ReadHeaderTimeout: 5 * time.Second,
 		ReadTimeout:       10 * time.Second,
 		WriteTimeout:      10 * time.Second,
@@ -76,10 +81,21 @@ type pinger interface {
 	Ping(ctx context.Context) error
 }
 
-func newRouter(db pinger, keys keyLookup) http.Handler {
+// app holds the dependencies the handlers need; tests fill it with fakes.
+type app struct {
+	db      pinger
+	keys    keyLookup
+	intents intentStore
+}
+
+func newRouter(a app) http.Handler {
+	authed := func(h http.HandlerFunc) http.Handler { return requireAPIKey(a.keys, h) }
+
 	mux := http.NewServeMux()
-	mux.HandleFunc("GET /healthz", handleHealthz(db))
-	mux.Handle("GET /v1/account", requireAPIKey(keys, http.HandlerFunc(handleAccount)))
+	mux.HandleFunc("GET /healthz", handleHealthz(a.db))
+	mux.Handle("GET /v1/account", authed(handleAccount))
+	mux.Handle("POST /v1/payment_intents", authed(handleCreateIntent(a.intents)))
+	mux.Handle("GET /v1/payment_intents/{id}", authed(handleGetIntent(a.intents)))
 	return mux
 }
 
