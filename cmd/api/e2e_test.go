@@ -5,16 +5,22 @@ import (
 	"io"
 	"log/slog"
 	"net/http"
+	"net/http/httptest"
 	"net/url"
+	"strings"
 	"testing"
 
+	"github.com/jackc/pgx/v5/pgxpool"
+
 	"github.com/truongthanhson/stripe-clone/internal/apikey"
+	"github.com/truongthanhson/stripe-clone/internal/idempotency"
 	"github.com/truongthanhson/stripe-clone/internal/paymentintent"
 	"github.com/truongthanhson/stripe-clone/internal/testdb"
 )
 
 // e2e is the real router over a real Postgres, with keys for two merchants.
 type e2e struct {
+	pool             *pgxpool.Pool
 	handler          http.Handler
 	testKey, liveKey string
 	otherMerchantKey string
@@ -44,10 +50,12 @@ func newE2E(t *testing.T) e2e {
 
 	logger := slog.New(slog.NewJSONHandler(io.Discard, nil))
 	return e2e{
+		pool: pool,
 		handler: withRequestLogging(logger, newRouter(app{
 			db:      pool,
 			keys:    keys,
 			intents: paymentintent.NewStore(pool),
+			idem:    idempotency.NewStore(pool),
 		})),
 		testKey:          issue(acme, apikey.ModeTest),
 		liveKey:          issue(acme, apikey.ModeLive),
@@ -77,4 +85,27 @@ func TestE2EPaymentIntentScoping(t *testing.T) {
 	if code, _ := e.do(t, "GET", path, e.otherMerchantKey, nil); code != http.StatusNotFound {
 		t.Fatalf("other merchant: %d, want 404", code)
 	}
+}
+
+// post sends a form POST with extra headers and returns the raw response.
+func (e e2e) post(t *testing.T, path, key string, form url.Values, headers map[string]string) *httptest.ResponseRecorder {
+	t.Helper()
+	req := httptest.NewRequest("POST", path, strings.NewReader(form.Encode()))
+	req.Header.Set("Content-Type", "application/x-www-form-urlencoded")
+	req.Header.Set("Authorization", "Bearer "+key)
+	for k, v := range headers {
+		req.Header.Set(k, v)
+	}
+	rec := httptest.NewRecorder()
+	e.handler.ServeHTTP(rec, req)
+	return rec
+}
+
+func (e e2e) count(t *testing.T, query string, args ...any) int {
+	t.Helper()
+	var n int
+	if err := e.pool.QueryRow(context.Background(), query, args...).Scan(&n); err != nil {
+		t.Fatal(err)
+	}
+	return n
 }
