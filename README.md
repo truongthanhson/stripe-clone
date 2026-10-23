@@ -46,6 +46,15 @@ curl localhost:8080/v1/payment_intents/pi_.../capture -H "Authorization: Bearer 
 curl -X POST localhost:8080/v1/payment_intents/pi_.../cancel -H "Authorization: Bearer sk_test_..."   # before capture: releases the hold
 ```
 
+List newest first and page with the last ID you saw; attach your own key-value `metadata`:
+
+```sh
+curl "localhost:8080/v1/payment_intents?limit=10" -H "Authorization: Bearer sk_test_..."               # {"object":"list","has_more":true,"data":[...]}
+curl "localhost:8080/v1/payment_intents?limit=10&starting_after=pi_..." -H "Authorization: Bearer sk_test_..."
+curl localhost:8080/v1/payment_intents/pi_... -H "Authorization: Bearer sk_test_..." \
+  -d "metadata[order_id]=6735" -d "metadata[old_key]="                               # sets order_id, removes old_key
+```
+
 A declined card returns `402` with `{"error": {"type": "card_error", "code": "card_declined", "decline_code": ..., "payment_intent": {...}}}`;
 the PaymentIntent goes back to `requires_payment_method` and can be confirmed again with another card.
 

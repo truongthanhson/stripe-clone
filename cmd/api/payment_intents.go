@@ -15,6 +15,8 @@ type intentStore interface {
 	Confirm(ctx context.Context, merchantID int64, livemode bool, id string, paymentMethod *string) (paymentintent.PaymentIntent, error)
 	Capture(ctx context.Context, merchantID int64, livemode bool, id string, amount *int64) (paymentintent.PaymentIntent, error)
 	Cancel(ctx context.Context, merchantID int64, livemode bool, id string, reason *string) (paymentintent.PaymentIntent, error)
+	Update(ctx context.Context, merchantID int64, livemode bool, id string, p paymentintent.UpdateParams) (paymentintent.PaymentIntent, error)
+	List(ctx context.Context, merchantID int64, livemode bool, p paymentintent.ListParams) ([]paymentintent.PaymentIntent, bool, error)
 }
 
 // intentJSON is the public representation of a PaymentIntent; field names and order follow Stripe's.
@@ -32,6 +34,7 @@ type intentJSON struct {
 	Description        *string                     `json:"description"`
 	LastPaymentError   *paymentintent.PaymentError `json:"last_payment_error"`
 	Livemode           bool                        `json:"livemode"`
+	Metadata           map[string]string           `json:"metadata"`
 	PaymentMethod      *string                     `json:"payment_method"`
 	Status             string                      `json:"status"`
 }
@@ -41,6 +44,10 @@ func renderIntent(pi paymentintent.PaymentIntent) intentJSON {
 	if pi.CanceledAt != nil {
 		t := pi.CanceledAt.Unix()
 		canceledAt = &t
+	}
+	metadata := pi.Metadata
+	if metadata == nil {
+		metadata = map[string]string{} // always an object, never null
 	}
 	return intentJSON{
 		ID:                 pi.ID,
@@ -56,6 +63,7 @@ func renderIntent(pi paymentintent.PaymentIntent) intentJSON {
 		Description:        pi.Description,
 		LastPaymentError:   pi.LastPaymentError,
 		Livemode:           pi.Livemode,
+		Metadata:           metadata,
 		PaymentMethod:      pi.PaymentMethod,
 		Status:             string(pi.Status),
 	}
@@ -63,7 +71,7 @@ func renderIntent(pi paymentintent.PaymentIntent) intentJSON {
 
 func handleCreateIntent(store intentStore) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
-		form, apiErr := parseForm(w, r, "amount", "currency", "capture_method", "confirm", "description", "payment_method")
+		form, apiErr := parseForm(w, r, "amount", "currency", "capture_method", "confirm", "description", "metadata", "payment_method")
 		if apiErr != nil {
 			writeError(w, http.StatusBadRequest, *apiErr)
 			return
@@ -84,6 +92,7 @@ func handleCreateIntent(store intentStore) http.HandlerFunc {
 			CaptureMethod: paymentintent.CaptureMethod(form.Get("capture_method")),
 			Description:   optionalString(form, "description"),
 			PaymentMethod: optionalString(form, "payment_method"),
+			Metadata:      parseMetadata(form),
 		}
 		if pm := params.PaymentMethod; pm != nil && !strings.HasPrefix(*pm, "pm_") {
 			writeError(w, http.StatusBadRequest, apiError{Type: "invalid_request_error", Code: "resource_missing",
@@ -116,6 +125,68 @@ func handleCreateIntent(store intentStore) http.HandlerFunc {
 			}
 		}
 		writeJSON(w, http.StatusOK, renderIntent(pi))
+	}
+}
+
+func handleUpdateIntent(store intentStore) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		form, apiErr := parseForm(w, r, "description", "metadata")
+		if apiErr != nil {
+			writeError(w, http.StatusBadRequest, *apiErr)
+			return
+		}
+		params := paymentintent.UpdateParams{Description: optionalString(form, "description")}
+		if hasMetadata(form) {
+			u := parseMetadata(form)
+			params.Metadata = &u
+		}
+		p := principalFrom(r.Context())
+		pi, err := store.Update(r.Context(), p.MerchantID, p.Livemode(), r.PathValue("id"), params)
+		if err != nil {
+			writeIntentError(w, r, err)
+			return
+		}
+		writeJSON(w, http.StatusOK, renderIntent(pi))
+	}
+}
+
+// listJSON is Stripe's list envelope. Clients page by passing the last data[].id as starting_after
+// while has_more is true.
+type listJSON[T any] struct {
+	Object  string `json:"object"`
+	URL     string `json:"url"`
+	HasMore bool   `json:"has_more"`
+	Data    []T    `json:"data"`
+}
+
+func handleListIntents(store intentStore) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		params, apiErr := parseListParams(r)
+		if apiErr != nil {
+			writeError(w, http.StatusBadRequest, *apiErr)
+			return
+		}
+		p := principalFrom(r.Context())
+		page, hasMore, err := store.List(r.Context(), p.MerchantID, p.Livemode(), params)
+		if errors.Is(err, paymentintent.ErrNotFound) {
+			param, id := "starting_after", params.StartingAfter
+			if params.EndingBefore != "" {
+				param, id = "ending_before", params.EndingBefore
+			}
+			e := noSuchIntent(id)
+			e.Param = param
+			writeError(w, http.StatusNotFound, e)
+			return
+		}
+		if err != nil {
+			writeIntentError(w, r, err)
+			return
+		}
+		out := listJSON[intentJSON]{Object: "list", URL: "/v1/payment_intents", HasMore: hasMore, Data: []intentJSON{}}
+		for _, pi := range page {
+			out.Data = append(out.Data, renderIntent(pi))
+		}
+		writeJSON(w, http.StatusOK, out)
 	}
 }
 

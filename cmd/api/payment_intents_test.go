@@ -25,6 +25,7 @@ func (f fakeIntents) Create(_ context.Context, merchantID int64, livemode bool, 
 		ID: paymentintent.NewID(), MerchantID: merchantID, Livemode: livemode,
 		Amount: p.Amount, Currency: p.Currency, Status: p.InitialStatus(), CaptureMethod: p.CaptureMethod,
 		Description: p.Description, PaymentMethod: p.PaymentMethod, Created: time.Unix(1_700_000_000, 0),
+		Metadata: p.Metadata.Set,
 	}
 	f[pi.ID] = pi
 	return pi, nil
@@ -48,6 +49,14 @@ func (fakeIntents) Capture(context.Context, int64, bool, string, *int64) (paymen
 
 func (fakeIntents) Cancel(context.Context, int64, bool, string, *string) (paymentintent.PaymentIntent, error) {
 	panic("not used by these tests; the e2e tests cover cancel")
+}
+
+func (fakeIntents) Update(context.Context, int64, bool, string, paymentintent.UpdateParams) (paymentintent.PaymentIntent, error) {
+	panic("not used by these tests; the e2e tests cover update")
+}
+
+func (fakeIntents) List(context.Context, int64, bool, paymentintent.ListParams) ([]paymentintent.PaymentIntent, bool, error) {
+	panic("not used by these tests; the e2e tests cover list")
 }
 
 var testKeys = fakeKeys{

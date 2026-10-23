@@ -6,6 +6,9 @@ import (
 	"net/http"
 	"net/url"
 	"strconv"
+	"strings"
+
+	"github.com/truongthanhson/stripe-clone/internal/paymentintent"
 )
 
 // maxBodyBytes bounds a request body; Stripe-style requests are small form posts.
@@ -46,9 +49,45 @@ func parseForm(w http.ResponseWriter, r *http.Request, allowed ...string) (url.V
 	return form, nil
 }
 
+// isAllowed accepts an exact name, or name[key] for hash parameters such as metadata[order_id].
 func isAllowed(name string, allowed []string) bool {
 	for _, a := range allowed {
-		if name == a {
+		if name == a || (strings.HasPrefix(name, a+"[") && strings.HasSuffix(name, "]")) {
+			return true
+		}
+	}
+	return false
+}
+
+// parseMetadata reads Stripe's hash syntax: metadata[key]=value sets a key, metadata[key]= unsets it,
+// and metadata= (empty) clears every key.
+func parseMetadata(form url.Values) paymentintent.MetadataUpdate {
+	var u paymentintent.MetadataUpdate
+	for name, values := range form {
+		if name == "metadata" {
+			u.Clear = values[0] == ""
+			continue
+		}
+		key, ok := strings.CutPrefix(name, "metadata[")
+		if !ok {
+			continue
+		}
+		key = strings.TrimSuffix(key, "]")
+		if values[0] == "" {
+			u.Unset = append(u.Unset, key)
+			continue
+		}
+		if u.Set == nil {
+			u.Set = map[string]string{}
+		}
+		u.Set[key] = values[0]
+	}
+	return u
+}
+
+func hasMetadata(form url.Values) bool {
+	for name := range form {
+		if name == "metadata" || strings.HasPrefix(name, "metadata[") {
 			return true
 		}
 	}
