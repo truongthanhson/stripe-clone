@@ -8,6 +8,8 @@ import (
 
 	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgxpool"
+
+	"github.com/truongthanhson/stripe-clone/internal/ledger"
 )
 
 var (
@@ -152,11 +154,36 @@ func (s *Store) Get(ctx context.Context, merchantID int64, livemode bool, id str
 	))
 }
 
-// transition moves a PaymentIntent from one status to another and applies the extra assignments in
+// querier is what both a pool and a transaction offer, so a query can run in either.
+type querier interface {
+	QueryRow(ctx context.Context, sql string, args ...any) pgx.Row
+}
+
+func (s *Store) transition(ctx context.Context, id string, from, to Status, set string, args ...any) (PaymentIntent, error) {
+	return transitionWith(ctx, s.pool, id, from, to, set, args...)
+}
+
+// succeed moves a PaymentIntent to succeeded and posts the charge to the ledger in one database
+// transaction: either the money is recorded and the status says so, or neither happened.
+func (s *Store) succeed(ctx context.Context, id string, from Status, set string, args ...any) (PaymentIntent, error) {
+	var pi PaymentIntent
+	err := pgx.BeginFunc(ctx, s.pool, func(tx pgx.Tx) error {
+		var err error
+		pi, err = transitionWith(ctx, tx, id, from, StatusSucceeded, set, args...)
+		if err != nil {
+			return err
+		}
+		_, err = ledger.Post(ctx, tx, ledger.Charge(pi.ID, pi.MerchantID, pi.Livemode, pi.Currency, pi.AmountReceived))
+		return err
+	})
+	return pi, err
+}
+
+// transitionWith moves a PaymentIntent from one status to another and applies the extra assignments in
 // set (which use $4 onwards). The WHERE status = from makes it a compare-and-swap: of two concurrent
 // requests, exactly one matches the row, and the other gets ErrStaleStatus. No lock is held.
 // With from == to it only updates fields, still asserting the status.
-func (s *Store) transition(ctx context.Context, id string, from, to Status, set string, args ...any) (PaymentIntent, error) {
+func transitionWith(ctx context.Context, q querier, id string, from, to Status, set string, args ...any) (PaymentIntent, error) {
 	if from != to {
 		if err := CheckTransition(from, to); err != nil {
 			return PaymentIntent{}, err
@@ -165,7 +192,7 @@ func (s *Store) transition(ctx context.Context, id string, from, to Status, set 
 	if set != "" {
 		set = ", " + set
 	}
-	pi, err := scan(s.pool.QueryRow(ctx,
+	pi, err := scan(q.QueryRow(ctx,
 		`UPDATE payment_intents SET status = $2, updated_at = now()`+set+`
 		 WHERE id = $1 AND status = $3 RETURNING `+columns,
 		append([]any{id, to, from}, args...)...,

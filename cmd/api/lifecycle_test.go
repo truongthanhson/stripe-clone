@@ -1,6 +1,7 @@
 package main
 
 import (
+	"context"
 	"encoding/json"
 	"net/http"
 	"net/url"
@@ -91,6 +92,9 @@ func testLifecycle(t *testing.T, e e2e) {
 		if got := e.network.Stats().Captured - before.Captured; got != 2000 {
 			t.Fatalf("network captured %d, want 2000", got)
 		}
+		if got := e.charged(t, pi.ID); got != 2000 {
+			t.Fatalf("ledger recorded %d, want 2000", got)
+		}
 	})
 
 	t.Run("manual capture: authorize, then capture part of it", func(t *testing.T) {
@@ -111,6 +115,9 @@ func testLifecycle(t *testing.T, e e2e) {
 		wantState(t, code, pi, 200, "succeeded")
 		if pi.AmountReceived != 1500 || pi.AmountCapturable != 0 {
 			t.Fatalf("after capture %+v", pi)
+		}
+		if got := e.charged(t, pi.ID); got != 1500 {
+			t.Fatalf("ledger recorded %d, want the captured 1500", got)
 		}
 
 		code, again := e.call(t, path(pi.ID, "capture"), e.testKey, url.Values{}, nil)
@@ -145,6 +152,9 @@ func testLifecycle(t *testing.T, e e2e) {
 		if got := e.network.Stats().Holds - before.Holds; got != 1 {
 			t.Fatalf("network holds = %d, want 1 (the network approved; we just never heard)", got)
 		}
+		if got := e.charged(t, pi.ID); got != 0 {
+			t.Fatalf("ledger recorded %d for an unknown outcome, want nothing yet", got)
+		}
 		code, pi = e.call(t, path(pi.ID, "cancel"), e.testKey, url.Values{}, nil)
 		wantError(t, code, pi, 400, "payment_intent_unexpected_state")
 	})
@@ -159,6 +169,9 @@ func testLifecycle(t *testing.T, e e2e) {
 		}
 		if got := e.network.Stats().Captures - before.Captures; got != 0 {
 			t.Fatalf("network captures = %d, want 0", got)
+		}
+		if got := e.charged(t, pi.ID); got != 0 {
+			t.Fatalf("ledger recorded %d for a canceled PaymentIntent", got)
 		}
 		code, again := e.call(t, path(pi.ID, "capture"), e.testKey, url.Values{}, nil)
 		wantError(t, code, again, 400, "payment_intent_unexpected_state")
@@ -191,6 +204,15 @@ func testLifecycle(t *testing.T, e e2e) {
 		wantState(t, code, pi, 200, "requires_payment_method")
 		code, pi = e.call(t, path(pi.ID, "confirm"), e.liveKey, url.Values{"payment_method": {"pm_card_visa"}}, nil)
 		wantError(t, code, pi, 400, "livemode_unavailable")
+	})
+
+	t.Run("the ledger matches the card network", func(t *testing.T) {
+		var ledgerGross int64
+		_ = e.pool.QueryRow(context.Background(), `SELECT COALESCE(SUM(balance), 0) FROM ledger_accounts WHERE type = 'asset'`).Scan(&ledgerGross)
+		if ledgerGross != e.network.Stats().Captured {
+			t.Fatalf("ledger says the network owes %d, the network captured %d", ledgerGross, e.network.Stats().Captured)
+		}
+		e.checkLedger(t)
 	})
 }
 
@@ -226,6 +248,7 @@ func TestE2ECaptureRacesCancel(t *testing.T) {
 			t.Fatalf("final status %v", final["status"])
 		}
 	}
+	e.checkLedger(t)
 }
 
 // TestE2EPhase1Gate is the Phase 1 gate: 50 concurrent retries with the same Idempotency-Key
@@ -300,5 +323,12 @@ func TestE2EPhase1Gate(t *testing.T) {
 		if after := e.network.Stats(); after.Captures-before.Captures != 1 {
 			t.Fatalf("%d charges, want 1", after.Captures-before.Captures)
 		}
+	})
+
+	t.Run("the ledger recorded exactly the charges the network made", func(t *testing.T) {
+		if got := e.count(t, `SELECT count(*) FROM ledger_transactions WHERE type = 'charge'`); got != e.network.Stats().Captures {
+			t.Fatalf("%d ledger charges, %d network captures", got, e.network.Stats().Captures)
+		}
+		e.checkLedger(t)
 	})
 }
