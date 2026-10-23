@@ -1,0 +1,366 @@
+openapi: 3.0.3
+info:
+  title: stripe-clone API
+  version: "2026-10-01"
+  description: |
+    A payments API modeled on Stripe's. Requests are form-encoded (`curl -d amount=2000`);
+    responses are JSON. Authenticate with `Authorization: Bearer sk_test_...` or `sk_live_...`.
+
+    This file is the source of truth: the server rejects parameters it does not list, and the
+    test suite fails when a handler returns a field or route that is not described here.
+servers:
+  - url: http://localhost:8080
+security:
+  - bearerAuth: []
+
+paths:
+  /healthz:
+    get:
+      operationId: GetHealth
+      summary: Liveness and database check
+      security: []
+      responses:
+        "200":
+          description: The API and its database are up.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/Health" }
+        "503":
+          description: The database is unreachable.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/Health" }
+
+  /openapi.yaml:
+    get:
+      operationId: GetOpenAPISpec
+      summary: This document
+      security: []
+      responses:
+        "200":
+          description: The OpenAPI document.
+          content:
+            application/yaml:
+              schema: { type: string }
+
+  /v1/account:
+    get:
+      operationId: GetAccount
+      summary: The merchant behind the API key
+      responses:
+        "200":
+          description: The account.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/Account" }
+        default: { $ref: "#/components/responses/Error" }
+
+  /v1/payment_intents:
+    get:
+      operationId: ListPaymentIntents
+      summary: List PaymentIntents, newest first
+      parameters:
+        - $ref: "#/components/parameters/Limit"
+        - $ref: "#/components/parameters/StartingAfter"
+        - $ref: "#/components/parameters/EndingBefore"
+      responses:
+        "200":
+          description: A page of PaymentIntents.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/PaymentIntentList" }
+        default: { $ref: "#/components/responses/Error" }
+    post:
+      operationId: CreatePaymentIntent
+      summary: Create a PaymentIntent, and optionally confirm it in the same call
+      parameters:
+        - $ref: "#/components/parameters/IdempotencyKey"
+      requestBody:
+        required: true
+        content:
+          application/x-www-form-urlencoded:
+            schema:
+              type: object
+              required: [amount, currency]
+              properties:
+                amount:
+                  type: integer
+                  description: In the currency's smallest unit; 2000 with usd is $20.00.
+                currency:
+                  type: string
+                  description: "Three-letter ISO code, lowercase. Supported: eur, gbp, jpy, usd, vnd."
+                capture_method: { $ref: "#/components/schemas/CaptureMethod" }
+                confirm:
+                  type: boolean
+                  description: Confirm immediately; requires payment_method.
+                description: { type: string, maxLength: 1000 }
+                metadata: { $ref: "#/components/schemas/MetadataParam" }
+                payment_method:
+                  type: string
+                  description: A test payment method such as pm_card_visa.
+            encoding:
+              metadata: { style: deepObject, explode: true }
+      responses:
+        "200":
+          description: The PaymentIntent.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/PaymentIntent" }
+        default: { $ref: "#/components/responses/Error" }
+
+  /v1/payment_intents/{id}:
+    parameters:
+      - $ref: "#/components/parameters/IntentID"
+    get:
+      operationId: GetPaymentIntent
+      summary: Retrieve a PaymentIntent
+      responses:
+        "200":
+          description: The PaymentIntent.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/PaymentIntent" }
+        default: { $ref: "#/components/responses/Error" }
+    post:
+      operationId: UpdatePaymentIntent
+      summary: Update description and metadata, at any status
+      parameters:
+        - $ref: "#/components/parameters/IdempotencyKey"
+      requestBody:
+        content:
+          application/x-www-form-urlencoded:
+            schema:
+              type: object
+              properties:
+                description: { type: string, maxLength: 1000 }
+                metadata: { $ref: "#/components/schemas/MetadataParam" }
+            encoding:
+              metadata: { style: deepObject, explode: true }
+      responses:
+        "200":
+          description: The updated PaymentIntent.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/PaymentIntent" }
+        default: { $ref: "#/components/responses/Error" }
+
+  /v1/payment_intents/{id}/confirm:
+    parameters:
+      - $ref: "#/components/parameters/IntentID"
+    post:
+      operationId: ConfirmPaymentIntent
+      summary: Charge (or authorize, with manual capture) the payment method
+      description: |
+        A decline returns 402 with a card_error whose payment_intent is back in requires_payment_method.
+        If the card network does not answer in time, the PaymentIntent stays processing.
+      parameters:
+        - $ref: "#/components/parameters/IdempotencyKey"
+      requestBody:
+        content:
+          application/x-www-form-urlencoded:
+            schema:
+              type: object
+              properties:
+                payment_method: { type: string }
+      responses:
+        "200":
+          description: The PaymentIntent, succeeded, requires_capture or processing.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/PaymentIntent" }
+        default: { $ref: "#/components/responses/Error" }
+
+  /v1/payment_intents/{id}/capture:
+    parameters:
+      - $ref: "#/components/parameters/IntentID"
+    post:
+      operationId: CapturePaymentIntent
+      summary: Capture an authorized PaymentIntent
+      parameters:
+        - $ref: "#/components/parameters/IdempotencyKey"
+      requestBody:
+        content:
+          application/x-www-form-urlencoded:
+            schema:
+              type: object
+              properties:
+                amount_to_capture:
+                  type: integer
+                  description: Defaults to amount_capturable; the rest is released.
+      responses:
+        "200":
+          description: The succeeded PaymentIntent.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/PaymentIntent" }
+        default: { $ref: "#/components/responses/Error" }
+
+  /v1/payment_intents/{id}/cancel:
+    parameters:
+      - $ref: "#/components/parameters/IntentID"
+    post:
+      operationId: CancelPaymentIntent
+      summary: Cancel a PaymentIntent that has not succeeded, releasing any hold
+      parameters:
+        - $ref: "#/components/parameters/IdempotencyKey"
+      requestBody:
+        content:
+          application/x-www-form-urlencoded:
+            schema:
+              type: object
+              properties:
+                cancellation_reason: { $ref: "#/components/schemas/CancellationReason" }
+      responses:
+        "200":
+          description: The canceled PaymentIntent.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/PaymentIntent" }
+        default: { $ref: "#/components/responses/Error" }
+
+components:
+  securitySchemes:
+    bearerAuth:
+      type: http
+      scheme: bearer
+      description: A secret key, sk_test_... or sk_live_...
+
+  parameters:
+    IntentID:
+      name: id
+      in: path
+      required: true
+      schema: { type: string }
+    IdempotencyKey:
+      name: Idempotency-Key
+      in: header
+      description: Retrying with the same key within 24 hours replays the first response.
+      schema: { type: string, maxLength: 255 }
+    Limit:
+      name: limit
+      in: query
+      schema: { type: integer, minimum: 1, maximum: 100, default: 10 }
+    StartingAfter:
+      name: starting_after
+      in: query
+      description: An object ID; returns the page after it.
+      schema: { type: string }
+    EndingBefore:
+      name: ending_before
+      in: query
+      description: An object ID; returns the page before it.
+      schema: { type: string }
+
+  responses:
+    Error:
+      description: An error, in the one shape every endpoint uses.
+      content:
+        application/json:
+          schema: { $ref: "#/components/schemas/Error" }
+
+  schemas:
+    Health:
+      type: object
+      additionalProperties: false
+      required: [status, database]
+      properties:
+        status: { type: string, enum: [ok, unavailable] }
+        database: { type: string, enum: [up, down] }
+
+    Account:
+      type: object
+      additionalProperties: false
+      required: [id, object, livemode]
+      properties:
+        id: { type: integer }
+        object: { type: string, enum: [account] }
+        livemode: { type: boolean }
+
+    CaptureMethod:
+      type: string
+      enum: [automatic, manual]
+
+    CancellationReason:
+      type: string
+      enum: [duplicate, fraudulent, requested_by_customer, abandoned]
+
+    MetadataParam:
+      type: object
+      description: metadata[key]=value sets a key, metadata[key]= unsets it, metadata= clears all.
+      additionalProperties: { type: string, maxLength: 500 }
+
+    PaymentError:
+      type: object
+      additionalProperties: false
+      required: [type, code, message]
+      properties:
+        type: { type: string, enum: [card_error] }
+        code: { type: string }
+        decline_code: { type: string }
+        message: { type: string }
+        payment_method: { type: string }
+
+    PaymentIntent:
+      type: object
+      additionalProperties: false
+      required: [id, object, amount, amount_capturable, amount_received, canceled_at, cancellation_reason,
+                 capture_method, created, currency, description, last_payment_error, livemode, metadata,
+                 payment_method, status]
+      properties:
+        id: { type: string, pattern: "^pi_" }
+        object: { type: string, enum: [payment_intent] }
+        amount: { type: integer, minimum: 1 }
+        amount_capturable: { type: integer, minimum: 0 }
+        amount_received: { type: integer, minimum: 0 }
+        canceled_at: { type: integer, nullable: true }
+        cancellation_reason:
+          type: string
+          nullable: true
+          enum: [duplicate, fraudulent, requested_by_customer, abandoned, null]
+        capture_method: { $ref: "#/components/schemas/CaptureMethod" }
+        created: { type: integer, description: Unix seconds. }
+        currency: { type: string, pattern: "^[a-z]{3}$" }
+        description: { type: string, nullable: true }
+        last_payment_error:
+          allOf: [{ $ref: "#/components/schemas/PaymentError" }]
+          nullable: true
+        livemode: { type: boolean }
+        metadata:
+          type: object
+          additionalProperties: { type: string }
+        payment_method: { type: string, nullable: true }
+        status:
+          type: string
+          enum: [requires_payment_method, requires_confirmation, requires_action, processing,
+                 requires_capture, succeeded, canceled]
+
+    PaymentIntentList:
+      type: object
+      additionalProperties: false
+      required: [object, url, has_more, data]
+      properties:
+        object: { type: string, enum: [list] }
+        url: { type: string }
+        has_more: { type: boolean }
+        data:
+          type: array
+          items: { $ref: "#/components/schemas/PaymentIntent" }
+
+    Error:
+      type: object
+      additionalProperties: false
+      required: [error]
+      properties:
+        error:
+          type: object
+          additionalProperties: false
+          required: [type, message]
+          properties:
+            type:
+              type: string
+              enum: [api_error, card_error, idempotency_error, invalid_request_error]
+            code: { type: string }
+            decline_code: { type: string }
+            param: { type: string }
+            message: { type: string }
+            payment_intent: { $ref: "#/components/schemas/PaymentIntent" }

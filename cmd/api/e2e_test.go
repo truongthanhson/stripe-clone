@@ -56,12 +56,12 @@ func newE2E(t *testing.T) e2e {
 	return e2e{
 		network: network,
 		pool:    pool,
-		handler: withRequestLogging(logger, newRouter(app{
+		handler: withContractCheck(t, withRequestLogging(logger, newRouter(app{
 			db:      pool,
 			keys:    keys,
 			intents: paymentintent.NewService(paymentintent.NewStore(pool), network, 200*time.Millisecond, logger),
 			idem:    idempotency.NewStore(pool),
-		})),
+		}))),
 		testKey:          issue(acme, apikey.ModeTest),
 		liveKey:          issue(acme, apikey.ModeLive),
 		otherMerchantKey: issue(globex, apikey.ModeTest),

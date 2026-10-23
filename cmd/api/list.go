@@ -14,13 +14,7 @@ const (
 
 // parseListParams reads limit, starting_after and ending_before from the query string, as Stripe's list endpoints take.
 func parseListParams(r *http.Request) (paymentintent.ListParams, *apiError) {
-	q := r.URL.Query()
-	for name := range q {
-		if name != "limit" && name != "starting_after" && name != "ending_before" {
-			return paymentintent.ListParams{}, &apiError{Type: "invalid_request_error", Code: "parameter_unknown",
-				Param: name, Message: "Received unknown parameter: " + name}
-		}
-	}
+	q := r.URL.Query() // unknown names and the limit's range were already checked against openapi.yaml
 	p := paymentintent.ListParams{
 		Limit:         defaultListLimit,
 		StartingAfter: q.Get("starting_after"),

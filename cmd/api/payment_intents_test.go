@@ -80,11 +80,16 @@ func do(t *testing.T, h http.Handler, method, path, key string, form url.Values)
 	rec := httptest.NewRecorder()
 	h.ServeHTTP(rec, req)
 
+	return rec.Code, decode(t, rec.Body.Bytes())
+}
+
+func decode(t *testing.T, body []byte) map[string]any {
+	t.Helper()
 	var out map[string]any
-	if err := json.Unmarshal(rec.Body.Bytes(), &out); err != nil {
-		t.Fatalf("response is not JSON: %q", rec.Body)
+	if err := json.Unmarshal(body, &out); err != nil {
+		t.Fatalf("response is not JSON: %q", body)
 	}
-	return rec.Code, out
+	return out
 }
 
 func errorOf(body map[string]any) map[string]any {
