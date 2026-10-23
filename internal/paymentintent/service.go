@@ -93,8 +93,7 @@ func (s *Service) Confirm(ctx context.Context, merchantID int64, livemode bool, 
 		s.logger.Warn("capture outcome unknown; payment intent left processing", "payment_intent", pi.ID, "error", err)
 		return s.transition(ctx, pi.ID, StatusProcessing, StatusProcessing, `authorization_id = $4`, auth.ID)
 	}
-	return s.transition(ctx, pi.ID, StatusProcessing, StatusSucceeded,
-		`authorization_id = $4, amount_received = amount`, auth.ID)
+	return s.succeed(ctx, pi.ID, StatusProcessing, `authorization_id = $4, amount_received = amount`, auth.ID)
 }
 
 // Capture takes the authorized money of a requires_capture PaymentIntent. amount defaults to all of
@@ -127,8 +126,7 @@ func (s *Service) Capture(ctx context.Context, merchantID int64, livemode bool, 
 		s.logger.Warn("capture failed", "payment_intent", pi.ID, "error", err)
 		return PaymentIntent{}, ErrNetworkUnavailable
 	}
-	pi, err = s.transition(ctx, pi.ID, StatusRequiresCapture, StatusSucceeded,
-		`amount_received = $4, amount_capturable = 0`, toCapture)
+	pi, err = s.succeed(ctx, pi.ID, StatusRequiresCapture, `amount_received = $4, amount_capturable = 0`, toCapture)
 	if errors.Is(err, ErrStaleStatus) {
 		return PaymentIntent{}, s.stateErrorNow(ctx, merchantID, livemode, id, "capture")
 	}

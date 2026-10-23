@@ -16,6 +16,7 @@ import (
 	"github.com/truongthanhson/stripe-clone/internal/apikey"
 	"github.com/truongthanhson/stripe-clone/internal/cardnetwork"
 	"github.com/truongthanhson/stripe-clone/internal/idempotency"
+	"github.com/truongthanhson/stripe-clone/internal/ledger"
 	"github.com/truongthanhson/stripe-clone/internal/paymentintent"
 	"github.com/truongthanhson/stripe-clone/internal/testdb"
 )
@@ -126,4 +127,28 @@ func withVersionHeader(version string, next http.Handler) http.Handler {
 		}
 		next.ServeHTTP(w, r)
 	})
+}
+
+// checkLedger fails the test if any ledger invariant is broken.
+func (e e2e) checkLedger(t *testing.T) {
+	t.Helper()
+	problems, err := ledger.Check(context.Background(), e.pool)
+	if err != nil || len(problems) > 0 {
+		t.Fatalf("ledger check: %v %v", err, problems)
+	}
+}
+
+// charged returns the gross amount the ledger recorded as charged for a PaymentIntent, 0 if none.
+func (e e2e) charged(t *testing.T, piID string) int64 {
+	t.Helper()
+	var gross int64
+	err := e.pool.QueryRow(context.Background(), `
+		SELECT COALESCE(SUM(e.amount), 0) FROM ledger_entries e
+		JOIN ledger_transactions t ON t.id = e.transaction_id
+		JOIN ledger_accounts a ON a.id = e.account_id
+		WHERE t.type = 'charge' AND t.source_id = $1 AND a.type = 'asset'`, piID).Scan(&gross)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return gross
 }
