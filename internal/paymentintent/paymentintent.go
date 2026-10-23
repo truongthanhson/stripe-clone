@@ -66,6 +66,7 @@ type PaymentIntent struct {
 	CaptureMethod CaptureMethod
 	Description   *string
 	PaymentMethod *string
+	Customer      *string
 	Metadata      map[string]string
 	Created       time.Time
 
@@ -99,6 +100,7 @@ type CreateParams struct {
 	CaptureMethod CaptureMethod // empty means automatic
 	Description   *string
 	PaymentMethod *string
+	Customer      *string // a cus_ ID of the same merchant and mode
 	Metadata      metadata.Update
 }
 

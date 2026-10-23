@@ -27,13 +27,13 @@ func NewStore(pool *pgxpool.Pool) *Store {
 	return &Store{pool: pool}
 }
 
-const columns = `id, merchant_id, livemode, amount, currency, status, capture_method, description, payment_method, metadata, created_at,
+const columns = `id, merchant_id, livemode, amount, currency, status, capture_method, description, payment_method, customer_id, metadata, created_at,
 	amount_capturable, amount_received, attempts, authorization_id, last_payment_error, canceled_at, cancellation_reason`
 
 func scan(row pgx.Row) (PaymentIntent, error) {
 	var pi PaymentIntent
 	err := row.Scan(&pi.ID, &pi.MerchantID, &pi.Livemode, &pi.Amount, &pi.Currency, &pi.Status,
-		&pi.CaptureMethod, &pi.Description, &pi.PaymentMethod, &pi.Metadata, &pi.Created,
+		&pi.CaptureMethod, &pi.Description, &pi.PaymentMethod, &pi.Customer, &pi.Metadata, &pi.Created,
 		&pi.AmountCapturable, &pi.AmountReceived, &pi.Attempts, &pi.AuthorizationID, &pi.LastPaymentError,
 		&pi.CanceledAt, &pi.CancellationReason)
 	if errors.Is(err, pgx.ErrNoRows) {
@@ -51,11 +51,22 @@ func (s *Store) Create(ctx context.Context, merchantID int64, livemode bool, p C
 	if err != nil {
 		return PaymentIntent{}, err
 	}
+	if p.Customer != nil {
+		var exists bool
+		if err := s.pool.QueryRow(ctx, `SELECT EXISTS (SELECT 1 FROM customers
+			WHERE id = $1 AND merchant_id = $2 AND livemode = $3 AND deleted_at IS NULL)`,
+			*p.Customer, merchantID, livemode).Scan(&exists); err != nil {
+			return PaymentIntent{}, err
+		}
+		if !exists {
+			return PaymentIntent{}, &ValidationError{"customer", "resource_missing", fmt.Sprintf("No such customer: '%s'", *p.Customer)}
+		}
+	}
 	return scan(s.pool.QueryRow(ctx, `
-		INSERT INTO payment_intents (id, merchant_id, livemode, amount, currency, status, capture_method, description, payment_method, metadata)
-		VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10)
+		INSERT INTO payment_intents (id, merchant_id, livemode, amount, currency, status, capture_method, description, payment_method, customer_id, metadata)
+		VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11)
 		RETURNING `+columns,
-		NewID(), merchantID, livemode, p.Amount, p.Currency, p.InitialStatus(), p.CaptureMethod, p.Description, p.PaymentMethod, md,
+		NewID(), merchantID, livemode, p.Amount, p.Currency, p.InitialStatus(), p.CaptureMethod, p.Description, p.PaymentMethod, p.Customer, md,
 	))
 }
 
@@ -91,10 +102,15 @@ func (s *Store) Update(ctx context.Context, merchantID int64, livemode bool, id 
 // ListParams pages through PaymentIntents newest first.
 type ListParams = listing.Params
 
-// List returns up to Limit PaymentIntents and whether more exist beyond them in the paging direction.
-func (s *Store) List(ctx context.Context, merchantID int64, livemode bool, p ListParams) ([]PaymentIntent, bool, error) {
+// List returns up to Limit PaymentIntents and whether more exist beyond them in the paging direction,
+// optionally only those of one customer.
+func (s *Store) List(ctx context.Context, merchantID int64, livemode bool, customerID string, p ListParams) ([]PaymentIntent, bool, error) {
 	query := `SELECT ` + columns + ` FROM payment_intents WHERE merchant_id = $1 AND livemode = $2`
 	args := []any{merchantID, livemode}
+	if customerID != "" {
+		args = append(args, customerID)
+		query += fmt.Sprintf(` AND customer_id = $%d`, len(args))
+	}
 	var cursor PaymentIntent
 	if id, _ := p.Cursor(); id != "" {
 		var err error

@@ -55,7 +55,7 @@ func (fakeIntents) Update(context.Context, int64, bool, string, paymentintent.Up
 	panic("not used by these tests; the e2e tests cover update")
 }
 
-func (fakeIntents) List(context.Context, int64, bool, paymentintent.ListParams) ([]paymentintent.PaymentIntent, bool, error) {
+func (fakeIntents) List(context.Context, int64, bool, string, paymentintent.ListParams) ([]paymentintent.PaymentIntent, bool, error) {
 	panic("not used by these tests; the e2e tests cover list")
 }
 
