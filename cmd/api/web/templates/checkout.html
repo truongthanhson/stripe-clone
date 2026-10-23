@@ -1,0 +1,83 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+{{- if .Processing}}
+<meta http-equiv="refresh" content="2">
+{{- end}}
+<title>Pay {{.Session.MerchantName}}</title>
+<link rel="stylesheet" href="/static/checkout.css">
+</head>
+<body>
+{{- $s := .Session}}
+{{- if not $s.Livemode}}
+<div class="testmode">Test mode</div>
+{{- end}}
+<main class="checkout">
+  <section class="summary">
+    {{- if and $s.CancelURL (eq $s.Status "open")}}
+    <a class="back" href="{{$s.CancelURL}}">&larr; Back</a>
+    {{- end}}
+    <p class="merchant">{{$s.MerchantName}}</p>
+    <p class="total">{{money $s.AmountTotal $s.Currency}}</p>
+    <ul class="items">
+      {{- range $s.LineItems}}
+      <li><span>{{.Name}}{{if gt .Quantity 1}} <small>× {{.Quantity}}</small>{{end}}</span><span>{{money .AmountTotal .Currency}}</span></li>
+      {{- end}}
+      <li class="sum"><span>Total due</span><span>{{money $s.AmountTotal $s.Currency}}</span></li>
+    </ul>
+  </section>
+
+  <section class="pay">
+  {{- if eq $s.Status "complete"}}
+    <h1>Payment successful</h1>
+    <p>{{money $s.AmountTotal $s.Currency}} was paid to {{$s.MerchantName}}.</p>
+    <a class="button" href="{{$s.RedirectURL}}">Return to {{$s.MerchantName}}</a>
+  {{- else if eq $s.Status "expired"}}
+    <h1>This payment page has expired</h1>
+    <p>Nothing was charged. Go back to {{$s.MerchantName}} to start again.</p>
+    {{- if $s.CancelURL}}<a class="button" href="{{$s.CancelURL}}">Return to {{$s.MerchantName}}</a>{{end}}
+  {{- else if .Processing}}
+    <h1>Processing your payment</h1>
+    <p>Your bank has not answered yet. Keep this page open; it updates on its own. Do not pay again.</p>
+  {{- else}}
+    <h1>Pay with card</h1>
+    <form method="post" action="/c/pay/{{$s.ID}}" autocomplete="on" novalidate>
+      <label for="email">Email</label>
+      <input id="email" name="email" type="email" autocomplete="email" value="{{.Email}}" required{{if eq .ErrField "email"}} aria-invalid="true"{{end}}>
+
+      <label for="number">Card number</label>
+      <input id="number" name="number" inputmode="numeric" autocomplete="cc-number" placeholder="1234 1234 1234 1234" required{{if eq .ErrField "number"}} aria-invalid="true"{{end}}>
+      <div class="row">
+        <div>
+          <label for="exp">Expiry</label>
+          <input id="exp" name="exp" inputmode="numeric" autocomplete="cc-exp" placeholder="MM / YY" required{{if eq .ErrField "exp"}} aria-invalid="true"{{end}}>
+        </div>
+        <div>
+          <label for="cvc">CVC</label>
+          <input id="cvc" name="cvc" inputmode="numeric" autocomplete="cc-csc" placeholder="CVC" required{{if eq .ErrField "cvc"}} aria-invalid="true"{{end}}>
+        </div>
+      </div>
+      {{- if .Error}}
+      <p class="error" role="alert">{{.Error}}</p>
+      {{- end}}
+      <button type="submit">Pay {{money $s.AmountTotal $s.Currency}}</button>
+    </form>
+    {{- if not $s.Livemode}}
+    <details class="hint">
+      <summary>Test cards</summary>
+      <p>Use any future expiry and any 3-digit CVC.</p>
+      <ul>
+        <li><code>4242 4242 4242 4242</code> succeeds</li>
+        <li><code>4000 0000 0000 0002</code> is declined</li>
+        <li><code>4000 0000 0000 9995</code> has insufficient funds</li>
+        <li><code>4000 0000 0000 9003</code> never gets an answer from the bank</li>
+      </ul>
+    </details>
+    {{- end}}
+  {{- end}}
+  </section>
+</main>
+</body>
+</html>

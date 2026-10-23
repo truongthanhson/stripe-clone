@@ -431,6 +431,114 @@ paths:
               schema: { $ref: "#/components/schemas/BalanceTransaction" }
         default: { $ref: "#/components/responses/Error" }
 
+  /v1/checkout/sessions:
+    get:
+      operationId: ListCheckoutSessions
+      summary: List Checkout Sessions, newest first
+      parameters:
+        - $ref: "#/components/parameters/Limit"
+        - $ref: "#/components/parameters/StartingAfter"
+        - $ref: "#/components/parameters/EndingBefore"
+      responses:
+        "200":
+          description: A page of Checkout Sessions.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/CheckoutSessionList" }
+        default: { $ref: "#/components/responses/Error" }
+    post:
+      operationId: CreateCheckoutSession
+      summary: Create a hosted payment page
+      description: |
+        Returns a session whose `url` is a payment page this server hosts. Send the buyer there; after
+        paying they are redirected to `success_url`, where `{CHECKOUT_SESSION_ID}` is replaced with the
+        session's ID. The session creates its PaymentIntent immediately. A session stays payable until
+        `expires_at` (24 hours by default) or until it is expired through the API.
+
+        Line items use Stripe's array syntax:
+        `line_items[0][price_data][currency]=usd`, `line_items[0][price_data][unit_amount]=2000`,
+        `line_items[0][price_data][product_data][name]=T-shirt`, `line_items[0][quantity]=1`.
+      parameters:
+        - $ref: "#/components/parameters/IdempotencyKey"
+      requestBody:
+        required: true
+        content:
+          application/x-www-form-urlencoded:
+            schema:
+              type: object
+              required: [mode, success_url]
+              properties:
+                mode: { type: string, enum: [payment] }
+                line_items:
+                  type: object
+                  description: |
+                    Up to 100 items, indexed from 0. Each needs price_data[currency],
+                    price_data[unit_amount], price_data[product_data][name] and quantity (1 to 999999).
+                success_url: { type: string, maxLength: 5000 }
+                cancel_url: { type: string, maxLength: 5000 }
+                customer: { type: string, description: "A cus_ ID; its PaymentIntent is attached to it." }
+                customer_email: { type: string, maxLength: 512, description: "Prefills the email field. Not with customer." }
+                client_reference_id: { type: string, maxLength: 200 }
+                expires_at: { type: integer, description: "Unix seconds, 30 minutes to 24 hours from now." }
+                metadata: { $ref: "#/components/schemas/MetadataParam" }
+            encoding:
+              metadata: { style: deepObject, explode: true }
+              line_items: { style: deepObject, explode: true }
+      responses:
+        "200":
+          description: The Checkout Session.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/CheckoutSession" }
+        default: { $ref: "#/components/responses/Error" }
+
+  /v1/checkout/sessions/{id}:
+    parameters:
+      - $ref: "#/components/parameters/CheckoutSessionID"
+    get:
+      operationId: GetCheckoutSession
+      summary: Retrieve a Checkout Session
+      responses:
+        "200":
+          description: The Checkout Session.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/CheckoutSession" }
+        default: { $ref: "#/components/responses/Error" }
+
+  /v1/checkout/sessions/{id}/line_items:
+    parameters:
+      - $ref: "#/components/parameters/CheckoutSessionID"
+    get:
+      operationId: ListCheckoutSessionLineItems
+      summary: The items a Checkout Session charges for
+      responses:
+        "200":
+          description: All of the session's line items.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/LineItemList" }
+        default: { $ref: "#/components/responses/Error" }
+
+  /v1/checkout/sessions/{id}/expire:
+    parameters:
+      - $ref: "#/components/parameters/CheckoutSessionID"
+    post:
+      operationId: ExpireCheckoutSession
+      summary: Close an open Checkout Session so it can no longer be paid
+      description: |
+        Cancels the session's PaymentIntent. Fails if the session is not open, or if a payment is in
+        progress on it.
+      parameters:
+        - $ref: "#/components/parameters/IdempotencyKey"
+      responses:
+        "200":
+          description: The expired Checkout Session.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/CheckoutSession" }
+        default: { $ref: "#/components/responses/Error" }
+
 components:
   securitySchemes:
     bearerAuth:
@@ -439,6 +547,11 @@ components:
       description: A secret key, sk_test_... or sk_live_...
 
   parameters:
+    CheckoutSessionID:
+      name: id
+      in: path
+      required: true
+      schema: { type: string }
     IntentID:
       name: id
       in: path
@@ -712,3 +825,76 @@ components:
             param: { type: string }
             message: { type: string }
             payment_intent: { $ref: "#/components/schemas/PaymentIntent" }
+
+    CheckoutSession:
+      type: object
+      additionalProperties: false
+      required: [id, object, amount_subtotal, amount_total, cancel_url, client_reference_id, created, currency,
+                 customer, customer_details, customer_email, expires_at, livemode, metadata, mode, payment_intent,
+                 payment_status, status, success_url, url]
+      properties:
+        id: { type: string, pattern: "^cs_(test|live)_" }
+        object: { type: string, enum: [checkout.session] }
+        amount_subtotal: { type: integer }
+        amount_total: { type: integer }
+        cancel_url: { type: string, nullable: true }
+        client_reference_id: { type: string, nullable: true }
+        created: { type: integer }
+        currency: { type: string, pattern: "^[a-z]{3}$" }
+        customer: { type: string, nullable: true }
+        customer_details:
+          type: object
+          nullable: true
+          additionalProperties: false
+          required: [email]
+          properties:
+            email: { type: string, nullable: true, description: The email the buyer entered on the page. }
+        customer_email: { type: string, nullable: true }
+        expires_at: { type: integer }
+        livemode: { type: boolean }
+        metadata:
+          type: object
+          additionalProperties: { type: string }
+        mode: { type: string, enum: [payment] }
+        payment_intent: { type: string, pattern: "^pi_" }
+        payment_status: { type: string, enum: [paid, unpaid] }
+        status: { type: string, enum: [open, complete, expired] }
+        success_url: { type: string }
+        url: { type: string, nullable: true, description: The payment page; null once the session is not open. }
+
+    CheckoutSessionList:
+      type: object
+      additionalProperties: false
+      required: [object, url, has_more, data]
+      properties:
+        object: { type: string, enum: [list] }
+        url: { type: string }
+        has_more: { type: boolean }
+        data:
+          type: array
+          items: { $ref: "#/components/schemas/CheckoutSession" }
+
+    LineItem:
+      type: object
+      additionalProperties: false
+      required: [id, object, amount_total, currency, description, quantity, unit_amount]
+      properties:
+        id: { type: string, pattern: "^li_" }
+        object: { type: string, enum: [item] }
+        amount_total: { type: integer }
+        currency: { type: string }
+        description: { type: string }
+        quantity: { type: integer }
+        unit_amount: { type: integer }
+
+    LineItemList:
+      type: object
+      additionalProperties: false
+      required: [object, url, has_more, data]
+      properties:
+        object: { type: string, enum: [list] }
+        url: { type: string }
+        has_more: { type: boolean }
+        data:
+          type: array
+          items: { $ref: "#/components/schemas/LineItem" }

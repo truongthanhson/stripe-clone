@@ -15,6 +15,7 @@ import (
 
 	"github.com/truongthanhson/stripe-clone/internal/apikey"
 	"github.com/truongthanhson/stripe-clone/internal/cardnetwork"
+	"github.com/truongthanhson/stripe-clone/internal/checkout"
 	"github.com/truongthanhson/stripe-clone/internal/customer"
 	"github.com/truongthanhson/stripe-clone/internal/idempotency"
 	"github.com/truongthanhson/stripe-clone/internal/ledger"
@@ -60,17 +61,20 @@ func newE2EAtVersion(t *testing.T, version string) e2e {
 
 	logger := slog.New(slog.NewJSONHandler(io.Discard, nil))
 	network := cardnetwork.NewFake()
+	intents := paymentintent.NewService(paymentintent.NewStore(pool), network, 200*time.Millisecond, logger)
 	return e2e{
 		network: network,
 		pool:    pool,
 		handler: withVersionHeader(version, withContractCheck(t, withRequestLogging(logger, newRouter(app{
 			db:        pool,
 			keys:      keys,
-			intents:   paymentintent.NewService(paymentintent.NewStore(pool), network, 200*time.Millisecond, logger),
+			intents:   intents,
 			refunds:   refund.NewService(pool, network, 200*time.Millisecond, logger),
 			customers: customer.NewStore(pool),
 			balances:  ledger.NewReader(pool),
 			idem:      idempotency.NewStore(pool),
+			checkout:  checkout.NewService(pool, intents),
+			publicURL: "https://pay.example.test",
 		})))),
 		testKey:          issue(acme, apikey.ModeTest),
 		liveKey:          issue(acme, apikey.ModeLive),

@@ -44,6 +44,12 @@ func scan(row pgx.Row) (PaymentIntent, error) {
 
 // Create validates p and stores a new PaymentIntent owned by the merchant in the given mode.
 func (s *Store) Create(ctx context.Context, merchantID int64, livemode bool, p CreateParams) (PaymentIntent, error) {
+	return CreateIn(ctx, s.pool, merchantID, livemode, p)
+}
+
+// CreateIn is Create inside the caller's transaction, for objects that own a PaymentIntent and must
+// be stored together with it.
+func CreateIn(ctx context.Context, q querier, merchantID int64, livemode bool, p CreateParams) (PaymentIntent, error) {
 	if err := p.Validate(); err != nil {
 		return PaymentIntent{}, err
 	}
@@ -53,7 +59,7 @@ func (s *Store) Create(ctx context.Context, merchantID int64, livemode bool, p C
 	}
 	if p.Customer != nil {
 		var exists bool
-		if err := s.pool.QueryRow(ctx, `SELECT EXISTS (SELECT 1 FROM customers
+		if err := q.QueryRow(ctx, `SELECT EXISTS (SELECT 1 FROM customers
 			WHERE id = $1 AND merchant_id = $2 AND livemode = $3 AND deleted_at IS NULL)`,
 			*p.Customer, merchantID, livemode).Scan(&exists); err != nil {
 			return PaymentIntent{}, err
@@ -62,7 +68,7 @@ func (s *Store) Create(ctx context.Context, merchantID int64, livemode bool, p C
 			return PaymentIntent{}, &ValidationError{"customer", "resource_missing", fmt.Sprintf("No such customer: '%s'", *p.Customer)}
 		}
 	}
-	return scan(s.pool.QueryRow(ctx, `
+	return scan(q.QueryRow(ctx, `
 		INSERT INTO payment_intents (id, merchant_id, livemode, amount, currency, status, capture_method, description, payment_method, customer_id, metadata)
 		VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11)
 		RETURNING `+columns,
