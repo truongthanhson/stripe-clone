@@ -4,12 +4,12 @@ import (
 	"context"
 	"errors"
 	"fmt"
-	"slices"
 
 	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgxpool"
 
 	"github.com/truongthanhson/stripe-clone/internal/ledger"
+	"github.com/truongthanhson/stripe-clone/internal/listing"
 )
 
 var (
@@ -88,44 +88,21 @@ func (s *Store) Update(ctx context.Context, merchantID int64, livemode bool, id 
 	return updated, err
 }
 
-// ListParams pages through PaymentIntents newest first. StartingAfter and EndingBefore are IDs of
-// PaymentIntents from a previous page; at most one may be set.
-type ListParams struct {
-	Limit         int
-	StartingAfter string
-	EndingBefore  string
-}
+// ListParams pages through PaymentIntents newest first.
+type ListParams = listing.Params
 
 // List returns up to Limit PaymentIntents and whether more exist beyond them in the paging direction.
-//
-// The cursor is a keyset on (created_at, id), not an OFFSET: a page costs the same however deep it is,
-// and inserts between requests do not shift items into the next page twice.
 func (s *Store) List(ctx context.Context, merchantID int64, livemode bool, p ListParams) ([]PaymentIntent, bool, error) {
-	cursor, older := p.StartingAfter, true
-	if p.EndingBefore != "" {
-		cursor, older = p.EndingBefore, false
-	}
-
 	query := `SELECT ` + columns + ` FROM payment_intents WHERE merchant_id = $1 AND livemode = $2`
 	args := []any{merchantID, livemode}
-	if cursor != "" {
-		c, err := s.Get(ctx, merchantID, livemode, cursor)
-		if err != nil {
+	var cursor PaymentIntent
+	if id, _ := p.Cursor(); id != "" {
+		var err error
+		if cursor, err = s.Get(ctx, merchantID, livemode, id); err != nil {
 			return nil, false, err
 		}
-		args = append(args, c.Created, c.ID)
-		if older {
-			query += ` AND (created_at, id) < ($3, $4)`
-		} else {
-			query += ` AND (created_at, id) > ($3, $4)`
-		}
 	}
-	if older {
-		query += ` ORDER BY created_at DESC, id DESC`
-	} else {
-		query += ` ORDER BY created_at ASC, id ASC`
-	}
-	query += fmt.Sprintf(` LIMIT %d`, p.Limit+1)
+	query, args = p.Keyset(query, args, cursor.Created, cursor.ID)
 
 	rows, err := s.pool.Query(ctx, query, args...)
 	if err != nil {
@@ -135,13 +112,7 @@ func (s *Store) List(ctx context.Context, merchantID int64, livemode bool, p Lis
 	if err != nil {
 		return nil, false, err
 	}
-	hasMore := len(page) > p.Limit
-	if hasMore {
-		page = page[:p.Limit]
-	}
-	if !older {
-		slices.Reverse(page)
-	}
+	page, hasMore := listing.Trim(p, page)
 	return page, hasMore, nil
 }
 

@@ -4,7 +4,7 @@ import (
 	"net/http"
 	"strconv"
 
-	"github.com/truongthanhson/stripe-clone/internal/paymentintent"
+	"github.com/truongthanhson/stripe-clone/internal/listing"
 )
 
 const (
@@ -13,9 +13,9 @@ const (
 )
 
 // parseListParams reads limit, starting_after and ending_before from the query string, as Stripe's list endpoints take.
-func parseListParams(r *http.Request) (paymentintent.ListParams, *apiError) {
+func parseListParams(r *http.Request) (listing.Params, *apiError) {
 	q := r.URL.Query() // unknown names and the limit's range were already checked against openapi.yaml
-	p := paymentintent.ListParams{
+	p := listing.Params{
 		Limit:         defaultListLimit,
 		StartingAfter: q.Get("starting_after"),
 		EndingBefore:  q.Get("ending_before"),
@@ -33,4 +33,12 @@ func parseListParams(r *http.Request) (paymentintent.ListParams, *apiError) {
 			Message: "You may only specify one of starting_after and ending_before."}
 	}
 	return p, nil
+}
+
+// cursorParam names the cursor parameter the request used, for error messages.
+func cursorParam(p listing.Params) string {
+	if p.EndingBefore != "" {
+		return "ending_before"
+	}
+	return "starting_after"
 }
