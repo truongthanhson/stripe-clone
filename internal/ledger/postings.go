@@ -19,9 +19,10 @@ func Fee(currency string, amount int64) int64 {
 //	credit platform fees       fee
 func Charge(paymentIntentID string, merchantID int64, livemode bool, currency string, amount int64) Transaction {
 	fee := Fee(currency, amount)
-	entries := []Entry{
-		{NetworkReceivable(livemode, currency), amount},
-		{MerchantPending(merchantID, livemode, currency), -(amount - fee)},
+	entries := []Entry{{NetworkReceivable(livemode, currency), amount}}
+	// Either side can be zero (a free charge, or one the fee swallows); a zero entry is not allowed.
+	if net := amount - fee; net > 0 {
+		entries = append(entries, Entry{MerchantPending(merchantID, livemode, currency), -net})
 	}
 	if fee > 0 {
 		entries = append(entries, Entry{PlatformFees(livemode, currency), -fee})

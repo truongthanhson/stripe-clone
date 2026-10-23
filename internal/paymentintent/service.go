@@ -93,7 +93,12 @@ func (s *Service) Confirm(ctx context.Context, merchantID int64, livemode bool, 
 		s.logger.Warn("capture outcome unknown; payment intent left processing", "payment_intent", pi.ID, "error", err)
 		return s.transition(ctx, pi.ID, StatusProcessing, StatusProcessing, `authorization_id = $4`, auth.ID)
 	}
-	return s.succeed(ctx, pi.ID, StatusProcessing, `authorization_id = $4, amount_received = amount`, auth.ID)
+	amount := pi.Amount
+	pi, err = s.succeed(ctx, pi.ID, StatusProcessing, `authorization_id = $4, amount_received = amount`, auth.ID)
+	if err != nil {
+		s.logger.Error("captured on the network but not recorded", "payment_intent", id, "amount", amount, "error", err)
+	}
+	return pi, err
 }
 
 // Capture takes the authorized money of a requires_capture PaymentIntent. amount defaults to all of
@@ -110,9 +115,15 @@ func (s *Service) Capture(ctx context.Context, merchantID int64, livemode bool, 
 	if amount != nil {
 		toCapture = *amount
 	}
-	if toCapture <= 0 || toCapture > pi.AmountCapturable {
+	// Like a new charge, a capture must be at least the currency's minimum: below it the fee would
+	// swallow the whole amount.
+	if minAmount := minAmounts[pi.Currency]; toCapture < minAmount {
+		return PaymentIntent{}, &ValidationError{"amount_to_capture", "amount_too_small",
+			fmt.Sprintf("Amount to capture must be at least %d %s.", minAmount, pi.Currency)}
+	}
+	if toCapture > pi.AmountCapturable {
 		return PaymentIntent{}, &ValidationError{"amount_to_capture", "amount_too_large",
-			fmt.Sprintf("Amount to capture must be between 1 and the capturable amount, %d.", pi.AmountCapturable)}
+			fmt.Sprintf("Amount to capture must be at most the capturable amount, %d.", pi.AmountCapturable)}
 	}
 
 	// Two concurrent captures both reach the network, which is idempotent on the authorization;
@@ -129,6 +140,11 @@ func (s *Service) Capture(ctx context.Context, merchantID int64, livemode bool, 
 	pi, err = s.succeed(ctx, pi.ID, StatusRequiresCapture, `amount_received = $4, amount_capturable = 0`, toCapture)
 	if errors.Is(err, ErrStaleStatus) {
 		return PaymentIntent{}, s.stateErrorNow(ctx, merchantID, livemode, id, "capture")
+	}
+	if err != nil {
+		// The network moved the money but we could not record it. A retry of the same capture is
+		// safe (the network capture is idempotent); Phase 3's resolver will also catch these.
+		s.logger.Error("captured on the network but not recorded", "payment_intent", id, "amount", toCapture, "error", err)
 	}
 	return pi, err
 }
