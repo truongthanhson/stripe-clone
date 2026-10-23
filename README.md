@@ -31,6 +31,24 @@ curl localhost:8080/v1/payment_intents -H "Authorization: Bearer sk_test_..." \
 curl localhost:8080/v1/payment_intents/pi_... -H "Authorization: Bearer sk_test_..."
 ```
 
+Charge a card in one call, or authorize now and capture later:
+
+```sh
+curl localhost:8080/v1/payment_intents -H "Authorization: Bearer sk_test_..." \
+  -d amount=2000 -d currency=usd -d payment_method=pm_card_visa -d confirm=true      # status: succeeded
+
+curl localhost:8080/v1/payment_intents -H "Authorization: Bearer sk_test_..." \
+  -d amount=2000 -d currency=usd -d capture_method=manual                            # status: requires_payment_method
+curl localhost:8080/v1/payment_intents/pi_.../confirm -H "Authorization: Bearer sk_test_..." \
+  -d payment_method=pm_card_visa                                                      # status: requires_capture
+curl localhost:8080/v1/payment_intents/pi_.../capture -H "Authorization: Bearer sk_test_..." \
+  -d amount_to_capture=1500                                                           # status: succeeded (rest released)
+curl -X POST localhost:8080/v1/payment_intents/pi_.../cancel -H "Authorization: Bearer sk_test_..."   # before capture: releases the hold
+```
+
+A declined card returns `402` with `{"error": {"type": "card_error", "code": "card_declined", "decline_code": ..., "payment_intent": {...}}}`;
+the PaymentIntent goes back to `requires_payment_method` and can be confirmed again with another card.
+
 Every POST accepts an `Idempotency-Key` header. A retry with the same key and parameters within 24 hours
 returns the first response (with `Idempotent-Replayed: true`) instead of doing the work twice; the same key
 with different parameters is rejected.

@@ -38,6 +38,18 @@ func (f fakeIntents) Get(_ context.Context, merchantID int64, livemode bool, id 
 	return pi, nil
 }
 
+func (fakeIntents) Confirm(context.Context, int64, bool, string, *string) (paymentintent.PaymentIntent, error) {
+	panic("not used by these tests; the e2e tests cover confirm")
+}
+
+func (fakeIntents) Capture(context.Context, int64, bool, string, *int64) (paymentintent.PaymentIntent, error) {
+	panic("not used by these tests; the e2e tests cover capture")
+}
+
+func (fakeIntents) Cancel(context.Context, int64, bool, string, *string) (paymentintent.PaymentIntent, error) {
+	panic("not used by these tests; the e2e tests cover cancel")
+}
+
 var testKeys = fakeKeys{
 	"sk_test_good": {MerchantID: 7, Mode: apikey.ModeTest},
 	"sk_live_good": {MerchantID: 7, Mode: apikey.ModeLive},
