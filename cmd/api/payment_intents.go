@@ -7,6 +7,7 @@ import (
 	"strings"
 
 	"github.com/truongthanhson/stripe-clone/internal/apiversion"
+	"github.com/truongthanhson/stripe-clone/internal/metadata"
 	"github.com/truongthanhson/stripe-clone/internal/paymentintent"
 )
 
@@ -257,8 +258,11 @@ func writeIntentError(w http.ResponseWriter, r *http.Request, err error) {
 		ve      *paymentintent.ValidationError
 		se      *paymentintent.StateError
 		decline *paymentintent.DeclineError
+		me      *metadata.Error
 	)
 	switch {
+	case errors.As(err, &me):
+		writeError(w, http.StatusBadRequest, apiError{Type: "invalid_request_error", Code: "parameter_invalid_metadata", Param: me.Param, Message: me.Message})
 	case errors.As(err, &ve):
 		writeError(w, http.StatusBadRequest, apiError{Type: "invalid_request_error", Code: ve.Code, Param: ve.Param, Message: ve.Message})
 	case errors.As(err, &se):

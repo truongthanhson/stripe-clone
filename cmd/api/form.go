@@ -8,7 +8,7 @@ import (
 	"strconv"
 	"strings"
 
-	"github.com/truongthanhson/stripe-clone/internal/paymentintent"
+	"github.com/truongthanhson/stripe-clone/internal/metadata"
 )
 
 // maxBodyBytes bounds a request body; Stripe-style requests are small form posts.
@@ -40,8 +40,8 @@ func parseForm(w http.ResponseWriter, r *http.Request) (url.Values, *apiError) {
 
 // parseMetadata reads Stripe's hash syntax: metadata[key]=value sets a key, metadata[key]= unsets it,
 // and metadata= (empty) clears every key.
-func parseMetadata(form url.Values) paymentintent.MetadataUpdate {
-	var u paymentintent.MetadataUpdate
+func parseMetadata(form url.Values) metadata.Update {
+	var u metadata.Update
 	for name, values := range form {
 		if name == "metadata" {
 			u.Clear = values[0] == ""

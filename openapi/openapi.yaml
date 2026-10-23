@@ -224,6 +224,75 @@ paths:
               schema: { $ref: "#/components/schemas/PaymentIntent" }
         default: { $ref: "#/components/responses/Error" }
 
+  /v1/refunds:
+    get:
+      operationId: ListRefunds
+      summary: List refunds, newest first
+      parameters:
+        - $ref: "#/components/parameters/Limit"
+        - $ref: "#/components/parameters/StartingAfter"
+        - $ref: "#/components/parameters/EndingBefore"
+        - name: payment_intent
+          in: query
+          description: Only refunds of this PaymentIntent.
+          schema: { type: string }
+      responses:
+        "200":
+          description: A page of refunds.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/RefundList" }
+        default: { $ref: "#/components/responses/Error" }
+    post:
+      operationId: CreateRefund
+      summary: Refund all or part of a succeeded PaymentIntent
+      description: |
+        The refund is pending while the card network processes it, succeeded once the money is
+        returned (and recorded in the ledger), or failed if the issuer refuses it. Several partial
+        refunds can never add up to more than the amount received.
+      parameters:
+        - $ref: "#/components/parameters/IdempotencyKey"
+      requestBody:
+        required: true
+        content:
+          application/x-www-form-urlencoded:
+            schema:
+              type: object
+              required: [payment_intent]
+              properties:
+                payment_intent: { type: string }
+                amount:
+                  type: integer
+                  description: Defaults to everything still refundable.
+                reason: { type: string, enum: [duplicate, fraudulent, requested_by_customer] }
+                metadata: { $ref: "#/components/schemas/MetadataParam" }
+            encoding:
+              metadata: { style: deepObject, explode: true }
+      responses:
+        "200":
+          description: The refund.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/Refund" }
+        default: { $ref: "#/components/responses/Error" }
+
+  /v1/refunds/{id}:
+    parameters:
+      - name: id
+        in: path
+        required: true
+        schema: { type: string }
+    get:
+      operationId: GetRefund
+      summary: Retrieve a refund
+      responses:
+        "200":
+          description: The refund.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/Refund" }
+        default: { $ref: "#/components/responses/Error" }
+
   /v1/balance:
     get:
       operationId: GetBalance
@@ -399,6 +468,39 @@ components:
         data:
           type: array
           items: { $ref: "#/components/schemas/PaymentIntent" }
+
+    Refund:
+      type: object
+      additionalProperties: false
+      required: [id, object, amount, created, currency, failure_reason, metadata, payment_intent, reason, status]
+      properties:
+        id: { type: string, pattern: "^re_" }
+        object: { type: string, enum: [refund] }
+        amount: { type: integer, minimum: 1 }
+        created: { type: integer }
+        currency: { type: string }
+        failure_reason: { type: string, nullable: true }
+        metadata:
+          type: object
+          additionalProperties: { type: string }
+        payment_intent: { type: string }
+        reason:
+          type: string
+          nullable: true
+          enum: [duplicate, fraudulent, requested_by_customer, null]
+        status: { type: string, enum: [pending, succeeded, failed] }
+
+    RefundList:
+      type: object
+      additionalProperties: false
+      required: [object, url, has_more, data]
+      properties:
+        object: { type: string, enum: [list] }
+        url: { type: string }
+        has_more: { type: boolean }
+        data:
+          type: array
+          items: { $ref: "#/components/schemas/Refund" }
 
     Money:
       type: object

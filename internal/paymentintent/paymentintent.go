@@ -8,6 +8,8 @@ import (
 	"fmt"
 	"slices"
 	"time"
+
+	"github.com/truongthanhson/stripe-clone/internal/metadata"
 )
 
 type Status string
@@ -97,13 +99,13 @@ type CreateParams struct {
 	CaptureMethod CaptureMethod // empty means automatic
 	Description   *string
 	PaymentMethod *string
-	Metadata      MetadataUpdate
+	Metadata      metadata.Update
 }
 
 // UpdateParams changes the fields a merchant may edit at any status. Nil means unchanged.
 type UpdateParams struct {
 	Description *string
-	Metadata    *MetadataUpdate
+	Metadata    *metadata.Update
 }
 
 // StateError means the action is not allowed in the PaymentIntent's current status.

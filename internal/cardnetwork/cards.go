@@ -22,6 +22,7 @@ const (
 	CardIncorrectCVC        = "4000000000000127"
 	CardProcessingError     = "4000000000000119"
 	CardTimeoutAfterApprove = "4000000000009001" // approved by the network, but the answer never arrives
+	CardRefundFails         = "4000000000005126" // charges fine; every refund is refused (Stripe's refund_fail card)
 )
 
 // testPaymentMethods are the payment method IDs merchants pass in test mode, named as Stripe's.
@@ -36,6 +37,7 @@ var testPaymentMethods = map[string]Card{
 	"pm_card_chargeDeclinedIncorrectCvc":      {Number: CardIncorrectCVC, Brand: "visa"},
 	"pm_card_chargeDeclinedProcessingError":   {Number: CardProcessingError, Brand: "visa"},
 	"pm_card_timeout":                         {Number: CardTimeoutAfterApprove, Brand: "visa"},
+	"pm_card_refundFail":                      {Number: CardRefundFails, Brand: "visa"},
 }
 
 // TestPaymentMethod returns the card behind a test payment method ID.

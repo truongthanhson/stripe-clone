@@ -19,6 +19,15 @@ type Network interface {
 	Capture(ctx context.Context, authorizationID string, amount int64) error
 	// Void releases an uncaptured hold.
 	Void(ctx context.Context, authorizationID string) error
+	// Refund returns captured money to the card. It is idempotent on reference: a retry of the same
+	// refund never pays out twice.
+	Refund(ctx context.Context, req RefundRequest) error
+}
+
+type RefundRequest struct {
+	Reference       string // our refund ID; the network deduplicates on it
+	AuthorizationID string
+	Amount          int64
 }
 
 type AuthorizeRequest struct {
@@ -44,4 +53,7 @@ var (
 	// ErrInvalidState means the operation does not fit the authorization's state,
 	// for example capturing a voided hold or capturing more than was authorized.
 	ErrInvalidState = errors.New("authorization is not in a state that allows this")
+	// ErrRefundFailed means the issuer refused the refund, for example because the card was closed.
+	// No money moved; the refund is final as failed.
+	ErrRefundFailed = errors.New("the card issuer refused the refund")
 )
