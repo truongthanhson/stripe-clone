@@ -84,3 +84,14 @@ func requiredString(form url.Values, name string) (string, *apiError) {
 	}
 	return form.Get(name), nil
 }
+
+func optionalBool(form url.Values, name string) (bool, *apiError) {
+	switch form.Get(name) {
+	case "", "false":
+		return false, nil
+	case "true":
+		return true, nil
+	}
+	return false, &apiError{Type: "invalid_request_error", Code: "parameter_invalid_boolean", Param: name,
+		Message: "Invalid boolean: " + form.Get(name)}
+}

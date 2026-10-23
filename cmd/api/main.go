@@ -15,6 +15,7 @@ import (
 	"github.com/jackc/pgx/v5/pgxpool"
 
 	"github.com/truongthanhson/stripe-clone/internal/apikey"
+	"github.com/truongthanhson/stripe-clone/internal/cardnetwork"
 	"github.com/truongthanhson/stripe-clone/internal/idempotency"
 	"github.com/truongthanhson/stripe-clone/internal/paymentintent"
 )
@@ -27,6 +28,10 @@ func main() {
 		os.Exit(1)
 	}
 }
+
+// networkTimeout bounds each card network call. It stays well under WriteTimeout, so the
+// client always gets an answer (possibly "processing") instead of a dropped connection.
+const networkTimeout = 5 * time.Second
 
 func run(logger *slog.Logger) error {
 	addr := ":" + getenv("PORT", "8080")
@@ -49,7 +54,7 @@ func run(logger *slog.Logger) error {
 		Handler: withRequestLogging(logger, newRouter(app{
 			db:      pool,
 			keys:    apikey.NewStore(pool),
-			intents: paymentintent.NewStore(pool),
+			intents: paymentintent.NewService(paymentintent.NewStore(pool), cardnetwork.NewFake(), networkTimeout, logger),
 			idem:    idem,
 		})),
 		ReadHeaderTimeout: 5 * time.Second,
@@ -117,6 +122,9 @@ func newRouter(a app) http.Handler {
 	mux.Handle("GET /v1/account", authed(handleAccount))
 	mux.Handle("POST /v1/payment_intents", authedPost(handleCreateIntent(a.intents)))
 	mux.Handle("GET /v1/payment_intents/{id}", authed(handleGetIntent(a.intents)))
+	mux.Handle("POST /v1/payment_intents/{id}/confirm", authedPost(handleConfirmIntent(a.intents)))
+	mux.Handle("POST /v1/payment_intents/{id}/capture", authedPost(handleCaptureIntent(a.intents)))
+	mux.Handle("POST /v1/payment_intents/{id}/cancel", authedPost(handleCancelIntent(a.intents)))
 	return mux
 }
 

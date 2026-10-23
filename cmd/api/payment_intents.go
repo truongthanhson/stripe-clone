@@ -12,40 +12,58 @@ import (
 type intentStore interface {
 	Create(ctx context.Context, merchantID int64, livemode bool, p paymentintent.CreateParams) (paymentintent.PaymentIntent, error)
 	Get(ctx context.Context, merchantID int64, livemode bool, id string) (paymentintent.PaymentIntent, error)
+	Confirm(ctx context.Context, merchantID int64, livemode bool, id string, paymentMethod *string) (paymentintent.PaymentIntent, error)
+	Capture(ctx context.Context, merchantID int64, livemode bool, id string, amount *int64) (paymentintent.PaymentIntent, error)
+	Cancel(ctx context.Context, merchantID int64, livemode bool, id string, reason *string) (paymentintent.PaymentIntent, error)
 }
 
 // intentJSON is the public representation of a PaymentIntent; field names and order follow Stripe's.
 type intentJSON struct {
-	ID            string  `json:"id"`
-	Object        string  `json:"object"`
-	Amount        int64   `json:"amount"`
-	CaptureMethod string  `json:"capture_method"`
-	Created       int64   `json:"created"`
-	Currency      string  `json:"currency"`
-	Description   *string `json:"description"`
-	Livemode      bool    `json:"livemode"`
-	PaymentMethod *string `json:"payment_method"`
-	Status        string  `json:"status"`
+	ID                 string                      `json:"id"`
+	Object             string                      `json:"object"`
+	Amount             int64                       `json:"amount"`
+	AmountCapturable   int64                       `json:"amount_capturable"`
+	AmountReceived     int64                       `json:"amount_received"`
+	CanceledAt         *int64                      `json:"canceled_at"`
+	CancellationReason *string                     `json:"cancellation_reason"`
+	CaptureMethod      string                      `json:"capture_method"`
+	Created            int64                       `json:"created"`
+	Currency           string                      `json:"currency"`
+	Description        *string                     `json:"description"`
+	LastPaymentError   *paymentintent.PaymentError `json:"last_payment_error"`
+	Livemode           bool                        `json:"livemode"`
+	PaymentMethod      *string                     `json:"payment_method"`
+	Status             string                      `json:"status"`
 }
 
 func renderIntent(pi paymentintent.PaymentIntent) intentJSON {
+	var canceledAt *int64
+	if pi.CanceledAt != nil {
+		t := pi.CanceledAt.Unix()
+		canceledAt = &t
+	}
 	return intentJSON{
-		ID:            pi.ID,
-		Object:        "payment_intent",
-		Amount:        pi.Amount,
-		CaptureMethod: string(pi.CaptureMethod),
-		Created:       pi.Created.Unix(),
-		Currency:      pi.Currency,
-		Description:   pi.Description,
-		Livemode:      pi.Livemode,
-		PaymentMethod: pi.PaymentMethod,
-		Status:        string(pi.Status),
+		ID:                 pi.ID,
+		Object:             "payment_intent",
+		Amount:             pi.Amount,
+		AmountCapturable:   pi.AmountCapturable,
+		AmountReceived:     pi.AmountReceived,
+		CanceledAt:         canceledAt,
+		CancellationReason: pi.CancellationReason,
+		CaptureMethod:      string(pi.CaptureMethod),
+		Created:            pi.Created.Unix(),
+		Currency:           pi.Currency,
+		Description:        pi.Description,
+		LastPaymentError:   pi.LastPaymentError,
+		Livemode:           pi.Livemode,
+		PaymentMethod:      pi.PaymentMethod,
+		Status:             string(pi.Status),
 	}
 }
 
 func handleCreateIntent(store intentStore) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
-		form, apiErr := parseForm(w, r, "amount", "currency", "capture_method", "description", "payment_method")
+		form, apiErr := parseForm(w, r, "amount", "currency", "capture_method", "confirm", "description", "payment_method")
 		if apiErr != nil {
 			writeError(w, http.StatusBadRequest, *apiErr)
 			return
@@ -73,32 +91,126 @@ func handleCreateIntent(store intentStore) http.HandlerFunc {
 			return
 		}
 
+		confirm, apiErr := optionalBool(form, "confirm")
+		if apiErr != nil {
+			writeError(w, http.StatusBadRequest, *apiErr)
+			return
+		}
+		if confirm && params.PaymentMethod == nil {
+			writeError(w, http.StatusBadRequest, apiError{Type: "invalid_request_error", Code: "parameter_missing",
+				Param: "payment_method", Message: "confirm=true requires a payment_method."})
+			return
+		}
+
 		p := principalFrom(r.Context())
 		pi, err := store.Create(r.Context(), p.MerchantID, p.Livemode(), params)
-		var ve *paymentintent.ValidationError
-		switch {
-		case errors.As(err, &ve):
-			writeError(w, http.StatusBadRequest, apiError{Type: "invalid_request_error", Code: ve.Code, Param: ve.Param, Message: ve.Message})
+		if err != nil {
+			writeIntentError(w, r, err)
 			return
-		case err != nil:
-			writeInternalError(w, r, "create payment intent", err)
+		}
+		if confirm {
+			pi, err = store.Confirm(r.Context(), p.MerchantID, p.Livemode(), pi.ID, nil)
+			if err != nil {
+				writeIntentError(w, r, err)
+				return
+			}
+		}
+		writeJSON(w, http.StatusOK, renderIntent(pi))
+	}
+}
+
+func handleConfirmIntent(store intentStore) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		form, apiErr := parseForm(w, r, "payment_method")
+		if apiErr != nil {
+			writeError(w, http.StatusBadRequest, *apiErr)
+			return
+		}
+		p := principalFrom(r.Context())
+		pi, err := store.Confirm(r.Context(), p.MerchantID, p.Livemode(), r.PathValue("id"), optionalString(form, "payment_method"))
+		if err != nil {
+			writeIntentError(w, r, err)
 			return
 		}
 		writeJSON(w, http.StatusOK, renderIntent(pi))
 	}
 }
 
+func handleCaptureIntent(store intentStore) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		form, apiErr := parseForm(w, r, "amount_to_capture")
+		if apiErr != nil {
+			writeError(w, http.StatusBadRequest, *apiErr)
+			return
+		}
+		var amount *int64
+		if form.Has("amount_to_capture") {
+			n, apiErr := requiredInt(form, "amount_to_capture")
+			if apiErr != nil {
+				writeError(w, http.StatusBadRequest, *apiErr)
+				return
+			}
+			amount = &n
+		}
+		p := principalFrom(r.Context())
+		pi, err := store.Capture(r.Context(), p.MerchantID, p.Livemode(), r.PathValue("id"), amount)
+		if err != nil {
+			writeIntentError(w, r, err)
+			return
+		}
+		writeJSON(w, http.StatusOK, renderIntent(pi))
+	}
+}
+
+func handleCancelIntent(store intentStore) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		form, apiErr := parseForm(w, r, "cancellation_reason")
+		if apiErr != nil {
+			writeError(w, http.StatusBadRequest, *apiErr)
+			return
+		}
+		p := principalFrom(r.Context())
+		pi, err := store.Cancel(r.Context(), p.MerchantID, p.Livemode(), r.PathValue("id"), optionalString(form, "cancellation_reason"))
+		if err != nil {
+			writeIntentError(w, r, err)
+			return
+		}
+		writeJSON(w, http.StatusOK, renderIntent(pi))
+	}
+}
+
+// writeIntentError maps the paymentintent package's errors to HTTP statuses and the API error shape.
+func writeIntentError(w http.ResponseWriter, r *http.Request, err error) {
+	var (
+		ve      *paymentintent.ValidationError
+		se      *paymentintent.StateError
+		decline *paymentintent.DeclineError
+	)
+	switch {
+	case errors.As(err, &ve):
+		writeError(w, http.StatusBadRequest, apiError{Type: "invalid_request_error", Code: ve.Code, Param: ve.Param, Message: ve.Message})
+	case errors.As(err, &se):
+		writeError(w, http.StatusBadRequest, apiError{Type: "invalid_request_error", Code: "payment_intent_unexpected_state", Message: se.Error()})
+	case errors.As(err, &decline):
+		pe := decline.Intent.LastPaymentError
+		intent := renderIntent(decline.Intent)
+		writeError(w, http.StatusPaymentRequired, apiError{Type: pe.Type, Code: pe.Code, DeclineCode: pe.DeclineCode,
+			Message: pe.Message, PaymentIntent: &intent})
+	case errors.Is(err, paymentintent.ErrNotFound):
+		writeError(w, http.StatusNotFound, noSuchIntent(r.PathValue("id")))
+	case errors.Is(err, paymentintent.ErrNetworkUnavailable):
+		writeError(w, http.StatusBadGateway, apiError{Type: "api_error", Code: "card_network_unavailable", Message: err.Error()})
+	default:
+		writeInternalError(w, r, "payment intent", err)
+	}
+}
+
 func handleGetIntent(store intentStore) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
-		id := r.PathValue("id")
 		p := principalFrom(r.Context())
-		pi, err := store.Get(r.Context(), p.MerchantID, p.Livemode(), id)
-		switch {
-		case errors.Is(err, paymentintent.ErrNotFound):
-			writeError(w, http.StatusNotFound, noSuchIntent(id))
-			return
-		case err != nil:
-			writeInternalError(w, r, "get payment intent", err)
+		pi, err := store.Get(r.Context(), p.MerchantID, p.Livemode(), r.PathValue("id"))
+		if err != nil {
+			writeIntentError(w, r, err)
 			return
 		}
 		writeJSON(w, http.StatusOK, renderIntent(pi))

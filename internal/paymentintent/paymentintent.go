@@ -62,6 +62,29 @@ type PaymentIntent struct {
 	Description   *string
 	PaymentMethod *string
 	Created       time.Time
+
+	AmountCapturable   int64 // authorized and not yet captured
+	AmountReceived     int64 // captured
+	Attempts           int
+	AuthorizationID    *string
+	LastPaymentError   *PaymentError
+	CanceledAt         *time.Time
+	CancellationReason *string
+}
+
+// PaymentError explains why the last confirmation failed, e.g. a declined card.
+type PaymentError struct {
+	Type          string `json:"type"`
+	Code          string `json:"code"`
+	DeclineCode   string `json:"decline_code,omitempty"`
+	Message       string `json:"message"`
+	PaymentMethod string `json:"payment_method,omitempty"`
+}
+
+// networkReference is what the card network deduplicates on: one per confirmation attempt, so a
+// retry of the same attempt never places a second hold, while a new card after a decline is a new attempt.
+func (pi PaymentIntent) networkReference() string {
+	return fmt.Sprintf("%s:%d", pi.ID, pi.Attempts)
 }
 
 type CreateParams struct {
@@ -71,6 +94,28 @@ type CreateParams struct {
 	Description   *string
 	PaymentMethod *string
 }
+
+// StateError means the action is not allowed in the PaymentIntent's current status.
+type StateError struct {
+	Action string
+	Status Status
+}
+
+func (e *StateError) Error() string {
+	return fmt.Sprintf("You cannot %s this PaymentIntent because it has a status of %s.", e.Action, e.Status)
+}
+
+// DeclineError means the card network declined the card. The PaymentIntent is back in
+// requires_payment_method and can be confirmed again with another card.
+type DeclineError struct {
+	Intent PaymentIntent
+}
+
+func (e *DeclineError) Error() string { return e.Intent.LastPaymentError.Message }
+
+// ErrNetworkUnavailable means the card network did not answer a capture or void. Both are
+// idempotent on the network side, so the client can simply retry.
+var ErrNetworkUnavailable = errors.New("the card network did not respond; retry the request")
 
 // ValidationError names the request parameter that is wrong, so the API can report it.
 type ValidationError struct {

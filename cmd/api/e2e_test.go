@@ -9,10 +9,12 @@ import (
 	"net/url"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/jackc/pgx/v5/pgxpool"
 
 	"github.com/truongthanhson/stripe-clone/internal/apikey"
+	"github.com/truongthanhson/stripe-clone/internal/cardnetwork"
 	"github.com/truongthanhson/stripe-clone/internal/idempotency"
 	"github.com/truongthanhson/stripe-clone/internal/paymentintent"
 	"github.com/truongthanhson/stripe-clone/internal/testdb"
@@ -20,6 +22,7 @@ import (
 
 // e2e is the real router over a real Postgres, with keys for two merchants.
 type e2e struct {
+	network          *cardnetwork.Fake
 	pool             *pgxpool.Pool
 	handler          http.Handler
 	testKey, liveKey string
@@ -49,12 +52,14 @@ func newE2E(t *testing.T) e2e {
 	}
 
 	logger := slog.New(slog.NewJSONHandler(io.Discard, nil))
+	network := cardnetwork.NewFake()
 	return e2e{
-		pool: pool,
+		network: network,
+		pool:    pool,
 		handler: withRequestLogging(logger, newRouter(app{
 			db:      pool,
 			keys:    keys,
-			intents: paymentintent.NewStore(pool),
+			intents: paymentintent.NewService(paymentintent.NewStore(pool), network, 200*time.Millisecond, logger),
 			idem:    idempotency.NewStore(pool),
 		})),
 		testKey:          issue(acme, apikey.ModeTest),

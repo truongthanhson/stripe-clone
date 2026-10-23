@@ -7,10 +7,13 @@ import (
 
 // apiError is the one error shape every endpoint returns, modeled on Stripe's.
 type apiError struct {
-	Type    string `json:"type"`
-	Code    string `json:"code,omitempty"`
-	Param   string `json:"param,omitempty"`
-	Message string `json:"message"`
+	Type        string `json:"type"`
+	Code        string `json:"code,omitempty"`
+	DeclineCode string `json:"decline_code,omitempty"`
+	Param       string `json:"param,omitempty"`
+	Message     string `json:"message"`
+	// PaymentIntent is attached to card errors so the client sees the updated object without a second request.
+	PaymentIntent *intentJSON `json:"payment_intent,omitempty"`
 }
 
 func writeError(w http.ResponseWriter, status int, e apiError) {
