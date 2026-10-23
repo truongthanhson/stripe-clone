@@ -48,7 +48,10 @@ type CaptureMethod string
 
 const (
 	CaptureAutomatic CaptureMethod = "automatic"
-	CaptureManual    CaptureMethod = "manual"
+	// CaptureAutomaticAsync captures right after authorization, like automatic. It is the default
+	// from API version 2026-10-23, mirroring Stripe's own change of default.
+	CaptureAutomaticAsync CaptureMethod = "automatic_async"
+	CaptureManual         CaptureMethod = "manual"
 )
 
 type PaymentIntent struct {
@@ -151,9 +154,11 @@ func (p *CreateParams) Validate() error {
 	if p.CaptureMethod == "" {
 		p.CaptureMethod = CaptureAutomatic
 	}
-	if p.CaptureMethod != CaptureAutomatic && p.CaptureMethod != CaptureManual {
+	switch p.CaptureMethod {
+	case CaptureAutomatic, CaptureAutomaticAsync, CaptureManual:
+	default:
 		return &ValidationError{"capture_method", "parameter_invalid_string",
-			fmt.Sprintf("Invalid capture_method: must be one of automatic or manual, got %q.", p.CaptureMethod)}
+			fmt.Sprintf("Invalid capture_method: must be one of automatic, automatic_async or manual, got %q.", p.CaptureMethod)}
 	}
 	minAmount, ok := minAmounts[p.Currency]
 	if !ok {

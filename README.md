@@ -78,6 +78,18 @@ from the card behind it.
 | `pm_card_chargeDeclinedProcessingError` | Declined, `processing_error` |
 | `pm_card_timeout` | The network approves but its answer never arrives (outcome unknown) |
 
+## API versions
+
+Each merchant is pinned to the API version that was current when they were created, so later breaking
+changes never reach an existing integration. Send `Stripe-Version: 2026-10-01` to use a specific version
+for one request; every response says which version rendered it. Re-pin a merchant after they have tested:
+
+```sh
+go run ./cmd/admin set-api-version -merchant 1 -version 2026-10-23
+```
+
+Changes are listed in `internal/apiversion` and in the spec's description.
+
 ## API reference
 
 [`openapi/openapi.yaml`](openapi/openapi.yaml) is the source of truth, also served at `GET /openapi.yaml`.

@@ -6,6 +6,8 @@ import (
 	"net/url"
 	"sync"
 	"testing"
+
+	"github.com/truongthanhson/stripe-clone/internal/apiversion"
 )
 
 // intentResp is the subset of a PaymentIntent or error response these tests read.
@@ -69,8 +71,15 @@ func wantError(t *testing.T, code int, pi intentResp, wantCode int, wantErrCode 
 	}
 }
 
+// TestE2ELifecycle runs once per released API version: an integration written against any version
+// must keep working against today's server.
 func TestE2ELifecycle(t *testing.T) {
-	e := newE2E(t)
+	for _, version := range apiversion.All() {
+		t.Run(version, func(t *testing.T) { testLifecycle(t, newE2EAtVersion(t, version)) })
+	}
+}
+
+func testLifecycle(t *testing.T, e e2e) {
 	path := func(id, action string) string { return "/v1/payment_intents/" + id + "/" + action }
 
 	t.Run("automatic capture: confirm charges the card", func(t *testing.T) {

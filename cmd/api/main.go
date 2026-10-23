@@ -119,13 +119,13 @@ type route struct {
 
 func routes(a app) []route {
 	spec := loadSpec()
-	// Order matters: authenticate, then validate against the spec, then claim the idempotency key,
-	// so a malformed request never stores a response under its key.
+	// Order matters: authenticate, pick the API version, validate against the spec, then claim the
+	// idempotency key, so a malformed request never stores a response under its key.
 	authed := func(h http.HandlerFunc) http.Handler {
-		return requireAPIKey(a.keys, withRequestValidation(spec, h))
+		return requireAPIKey(a.keys, withAPIVersion(withRequestValidation(spec, h)))
 	}
 	authedPost := func(h http.HandlerFunc) http.Handler {
-		return requireAPIKey(a.keys, withRequestValidation(spec, withIdempotency(a.idem, h)))
+		return requireAPIKey(a.keys, withAPIVersion(withRequestValidation(spec, withIdempotency(a.idem, h))))
 	}
 	return []route{
 		{"GET /healthz", handleHealthz(a.db)},
