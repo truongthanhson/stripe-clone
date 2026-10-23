@@ -3,9 +3,12 @@ package apikey
 import (
 	"context"
 	"errors"
+	"fmt"
 
 	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgxpool"
+
+	"github.com/truongthanhson/stripe-clone/internal/apiversion"
 )
 
 var ErrNotFound = errors.New("api key not found or revoked")
@@ -14,6 +17,7 @@ var ErrNotFound = errors.New("api key not found or revoked")
 type Principal struct {
 	MerchantID int64
 	Mode       Mode
+	APIVersion string // the version the merchant is pinned to
 }
 
 func (p Principal) Livemode() bool { return p.Mode == ModeLive }
@@ -26,13 +30,26 @@ func NewStore(pool *pgxpool.Pool) *Store {
 	return &Store{pool: pool}
 }
 
+// CreateMerchant creates a merchant pinned to the latest API version.
 func (s *Store) CreateMerchant(ctx context.Context, name, email string) (int64, error) {
 	var id int64
 	err := s.pool.QueryRow(ctx,
-		`INSERT INTO merchants (name, email) VALUES ($1, $2) RETURNING id`,
-		name, email,
+		`INSERT INTO merchants (name, email, api_version) VALUES ($1, $2, $3) RETURNING id`,
+		name, email, apiversion.Latest(),
 	).Scan(&id)
 	return id, err
+}
+
+// SetAPIVersion re-pins a merchant, the step a merchant takes after testing their integration on a newer version.
+func (s *Store) SetAPIVersion(ctx context.Context, merchantID int64, version string) error {
+	if !apiversion.Valid(version) {
+		return fmt.Errorf("unknown API version %q; released versions: %v", version, apiversion.All())
+	}
+	tag, err := s.pool.Exec(ctx, `UPDATE merchants SET api_version = $2, updated_at = now() WHERE id = $1`, merchantID, version)
+	if err == nil && tag.RowsAffected() == 0 {
+		err = fmt.Errorf("merchant %d not found", merchantID)
+	}
+	return err
 }
 
 func (s *Store) Issue(ctx context.Context, merchantID int64, mode Mode) (Key, error) {
@@ -54,9 +71,11 @@ func (s *Store) Lookup(ctx context.Context, secret string) (Principal, error) {
 	var p Principal
 	var mode string
 	err := s.pool.QueryRow(ctx,
-		`SELECT merchant_id, mode FROM api_keys WHERE secret_hash = $1 AND revoked_at IS NULL`,
+		`SELECT k.merchant_id, k.mode, m.api_version
+		 FROM api_keys k JOIN merchants m ON m.id = k.merchant_id
+		 WHERE k.secret_hash = $1 AND k.revoked_at IS NULL`,
 		Hash(secret),
-	).Scan(&p.MerchantID, &mode)
+	).Scan(&p.MerchantID, &mode, &p.APIVersion)
 	if errors.Is(err, pgx.ErrNoRows) {
 		return Principal{}, ErrNotFound
 	}

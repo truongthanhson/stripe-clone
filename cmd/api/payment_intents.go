@@ -6,6 +6,7 @@ import (
 	"net/http"
 	"strings"
 
+	"github.com/truongthanhson/stripe-clone/internal/apiversion"
 	"github.com/truongthanhson/stripe-clone/internal/paymentintent"
 )
 
@@ -100,6 +101,9 @@ func handleCreateIntent(store intentStore) http.HandlerFunc {
 			return
 		}
 
+		if params.CaptureMethod == "" {
+			params.CaptureMethod = paymentintent.CaptureMethod(apiversion.DefaultCaptureMethod(versionFrom(r.Context())))
+		}
 		confirm, apiErr := optionalBool(form, "confirm")
 		if apiErr != nil {
 			writeError(w, http.StatusBadRequest, *apiErr)

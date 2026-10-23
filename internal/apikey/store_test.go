@@ -6,6 +6,7 @@ import (
 	"testing"
 
 	"github.com/truongthanhson/stripe-clone/internal/apikey"
+	"github.com/truongthanhson/stripe-clone/internal/apiversion"
 	"github.com/truongthanhson/stripe-clone/internal/testdb"
 )
 
@@ -42,6 +43,22 @@ func TestStore(t *testing.T) {
 		}
 		if p.MerchantID != merchantID || p.Mode != apikey.ModeLive || !p.Livemode() {
 			t.Fatalf("live key resolved to %+v", p)
+		}
+	})
+
+	t.Run("new merchants are pinned to the latest API version, and can be re-pinned", func(t *testing.T) {
+		p, _ := store.Lookup(ctx, testKey.Secret)
+		if p.APIVersion != apiversion.Latest() {
+			t.Fatalf("APIVersion = %q, want %q", p.APIVersion, apiversion.Latest())
+		}
+		if err := store.SetAPIVersion(ctx, merchantID, apiversion.V2026_10_01); err != nil {
+			t.Fatal(err)
+		}
+		if p, _ := store.Lookup(ctx, testKey.Secret); p.APIVersion != apiversion.V2026_10_01 {
+			t.Fatalf("after re-pin APIVersion = %q", p.APIVersion)
+		}
+		if err := store.SetAPIVersion(ctx, merchantID, "2019-01-01"); err == nil {
+			t.Fatal("unknown version accepted")
 		}
 	})
 

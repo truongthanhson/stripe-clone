@@ -1,10 +1,16 @@
 openapi: 3.0.3
 info:
   title: stripe-clone API
-  version: "2026-10-01"
+  version: "2026-10-23"
   description: |
     A payments API modeled on Stripe's. Requests are form-encoded (`curl -d amount=2000`);
     responses are JSON. Authenticate with `Authorization: Bearer sk_test_...` or `sk_live_...`.
+
+    Versioning: this document describes the latest version, 2026-10-23. Each merchant is pinned to
+    the version current when they signed up; send `Stripe-Version: YYYY-MM-DD` to use another for one
+    request. Every response carries the `Stripe-Version` it was rendered for. Changes:
+    - 2026-10-23: capture_method defaults to automatic_async instead of automatic. Earlier versions
+      see automatic_async reported as automatic.
 
     This file is the source of truth: the server rejects parameters it does not list, and the
     test suite fails when a handler returns a field or route that is not described here.
@@ -278,7 +284,10 @@ components:
 
     CaptureMethod:
       type: string
-      enum: [automatic, manual]
+      enum: [automatic, automatic_async, manual]
+      description: |
+        automatic and automatic_async both capture right after authorization; manual waits for
+        /capture. Omitted, it defaults to automatic_async (automatic before version 2026-10-23).
 
     CancellationReason:
       type: string

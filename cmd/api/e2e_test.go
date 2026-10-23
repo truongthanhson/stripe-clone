@@ -29,7 +29,11 @@ type e2e struct {
 	otherMerchantKey string
 }
 
-func newE2E(t *testing.T) e2e {
+func newE2E(t *testing.T) e2e { return newE2EAtVersion(t, "") }
+
+// newE2EAtVersion sends every request with Stripe-Version: version (none when empty), which is how
+// an integration written against an older version talks to today's server.
+func newE2EAtVersion(t *testing.T, version string) e2e {
 	t.Helper()
 	ctx := context.Background()
 	pool := testdb.New(t)
@@ -56,12 +60,12 @@ func newE2E(t *testing.T) e2e {
 	return e2e{
 		network: network,
 		pool:    pool,
-		handler: withContractCheck(t, withRequestLogging(logger, newRouter(app{
+		handler: withVersionHeader(version, withContractCheck(t, withRequestLogging(logger, newRouter(app{
 			db:      pool,
 			keys:    keys,
 			intents: paymentintent.NewService(paymentintent.NewStore(pool), network, 200*time.Millisecond, logger),
 			idem:    idempotency.NewStore(pool),
-		}))),
+		})))),
 		testKey:          issue(acme, apikey.ModeTest),
 		liveKey:          issue(acme, apikey.ModeLive),
 		otherMerchantKey: issue(globex, apikey.ModeTest),
@@ -113,4 +117,13 @@ func (e e2e) count(t *testing.T, query string, args ...any) int {
 		t.Fatal(err)
 	}
 	return n
+}
+
+func withVersionHeader(version string, next http.Handler) http.Handler {
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if version != "" && r.Header.Get("Stripe-Version") == "" {
+			r.Header.Set("Stripe-Version", version)
+		}
+		next.ServeHTTP(w, r)
+	})
 }

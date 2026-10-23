@@ -4,6 +4,7 @@
 //
 //	admin create-merchant -name NAME -email EMAIL
 //	admin issue-key -merchant ID -mode test|live
+//	admin set-api-version -merchant ID -version YYYY-MM-DD
 package main
 
 import (
@@ -18,7 +19,7 @@ import (
 	"github.com/truongthanhson/stripe-clone/internal/apikey"
 )
 
-const usage = "usage: admin create-merchant -name NAME -email EMAIL | admin issue-key -merchant ID -mode test|live"
+const usage = "usage: admin create-merchant -name NAME -email EMAIL | admin issue-key -merchant ID -mode test|live | admin set-api-version -merchant ID -version YYYY-MM-DD"
 
 func main() {
 	if err := run(context.Background(), os.Args[1:]); err != nil {
@@ -80,6 +81,22 @@ func run(ctx context.Context, args []string) error {
 		}
 		fmt.Println(key.Secret)
 		fmt.Fprintln(os.Stderr, "Store this key now; it cannot be shown again.")
+		return nil
+
+	case "set-api-version":
+		fs := flag.NewFlagSet("set-api-version", flag.ContinueOnError)
+		merchantID := fs.Int64("merchant", 0, "merchant id")
+		version := fs.String("version", "", "API version, e.g. 2026-10-23")
+		if err := fs.Parse(args[1:]); err != nil {
+			return err
+		}
+		if *merchantID == 0 || *version == "" {
+			return errors.New("-merchant and -version are required")
+		}
+		if err := store.SetAPIVersion(ctx, *merchantID, *version); err != nil {
+			return err
+		}
+		fmt.Printf("merchant %d pinned to API version %s\n", *merchantID, *version)
 		return nil
 
 	default:

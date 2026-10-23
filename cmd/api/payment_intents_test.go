@@ -108,7 +108,7 @@ func TestCreateIntent(t *testing.T) {
 	}
 	want := map[string]any{
 		"object": "payment_intent", "amount": 2000.0, "currency": "usd", "status": "requires_payment_method",
-		"capture_method": "automatic", "livemode": false, "description": "Order #1", "payment_method": nil,
+		"capture_method": "automatic_async", "livemode": false, "description": "Order #1", "payment_method": nil,
 	}
 	for k, v := range want {
 		if body[k] != v {
