@@ -18,7 +18,7 @@ type intentStore interface {
 	Capture(ctx context.Context, merchantID int64, livemode bool, id string, amount *int64) (paymentintent.PaymentIntent, error)
 	Cancel(ctx context.Context, merchantID int64, livemode bool, id string, reason *string) (paymentintent.PaymentIntent, error)
 	Update(ctx context.Context, merchantID int64, livemode bool, id string, p paymentintent.UpdateParams) (paymentintent.PaymentIntent, error)
-	List(ctx context.Context, merchantID int64, livemode bool, p paymentintent.ListParams) ([]paymentintent.PaymentIntent, bool, error)
+	List(ctx context.Context, merchantID int64, livemode bool, customerID string, p paymentintent.ListParams) ([]paymentintent.PaymentIntent, bool, error)
 }
 
 // intentJSON is the public representation of a PaymentIntent; field names and order follow Stripe's.
@@ -33,6 +33,7 @@ type intentJSON struct {
 	CaptureMethod      string                      `json:"capture_method"`
 	Created            int64                       `json:"created"`
 	Currency           string                      `json:"currency"`
+	Customer           *string                     `json:"customer"`
 	Description        *string                     `json:"description"`
 	LastPaymentError   *paymentintent.PaymentError `json:"last_payment_error"`
 	Livemode           bool                        `json:"livemode"`
@@ -62,6 +63,7 @@ func renderIntent(pi paymentintent.PaymentIntent) intentJSON {
 		CaptureMethod:      string(pi.CaptureMethod),
 		Created:            pi.Created.Unix(),
 		Currency:           pi.Currency,
+		Customer:           pi.Customer,
 		Description:        pi.Description,
 		LastPaymentError:   pi.LastPaymentError,
 		Livemode:           pi.Livemode,
@@ -94,6 +96,7 @@ func handleCreateIntent(store intentStore) http.HandlerFunc {
 			CaptureMethod: paymentintent.CaptureMethod(form.Get("capture_method")),
 			Description:   optionalString(form, "description"),
 			PaymentMethod: optionalString(form, "payment_method"),
+			Customer:      optionalString(form, "customer"),
 			Metadata:      parseMetadata(form),
 		}
 		if pm := params.PaymentMethod; pm != nil && !strings.HasPrefix(*pm, "pm_") {
@@ -172,7 +175,7 @@ func handleListIntents(store intentStore) http.HandlerFunc {
 			return
 		}
 		p := principalFrom(r.Context())
-		page, hasMore, err := store.List(r.Context(), p.MerchantID, p.Livemode(), params)
+		page, hasMore, err := store.List(r.Context(), p.MerchantID, p.Livemode(), r.URL.Query().Get("customer"), params)
 		if errors.Is(err, paymentintent.ErrNotFound) {
 			id, _ := params.Cursor()
 			e := noSuchIntent(id)

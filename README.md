@@ -62,6 +62,15 @@ curl localhost:8080/v1/balance -H "Authorization: Bearer sk_test_..."           
 curl localhost:8080/v1/balance_transactions -H "Authorization: Bearer sk_test_..."    # one per charge: amount, fee, net, source
 ```
 
+Customers group payments by who paid:
+
+```sh
+curl localhost:8080/v1/customers -H "Authorization: Bearer sk_test_..." -d email=jenny@example.com -d name="Jenny Rosen"
+curl localhost:8080/v1/payment_intents -H "Authorization: Bearer sk_test_..." -d amount=2000 -d currency=usd -d customer=cus_...
+curl "localhost:8080/v1/payment_intents?customer=cus_..." -H "Authorization: Bearer sk_test_..."
+curl -X DELETE localhost:8080/v1/customers/cus_... -H "Authorization: Bearer sk_test_..."   # {"id": "cus_...", "deleted": true}
+```
+
 Refund all or part of a succeeded payment; partial refunds can never add up to more than was received:
 
 ```sh

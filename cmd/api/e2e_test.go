@@ -15,6 +15,7 @@ import (
 
 	"github.com/truongthanhson/stripe-clone/internal/apikey"
 	"github.com/truongthanhson/stripe-clone/internal/cardnetwork"
+	"github.com/truongthanhson/stripe-clone/internal/customer"
 	"github.com/truongthanhson/stripe-clone/internal/idempotency"
 	"github.com/truongthanhson/stripe-clone/internal/ledger"
 	"github.com/truongthanhson/stripe-clone/internal/paymentintent"
@@ -63,12 +64,13 @@ func newE2EAtVersion(t *testing.T, version string) e2e {
 		network: network,
 		pool:    pool,
 		handler: withVersionHeader(version, withContractCheck(t, withRequestLogging(logger, newRouter(app{
-			db:       pool,
-			keys:     keys,
-			intents:  paymentintent.NewService(paymentintent.NewStore(pool), network, 200*time.Millisecond, logger),
-			refunds:  refund.NewService(pool, network, 200*time.Millisecond, logger),
-			balances: ledger.NewReader(pool),
-			idem:     idempotency.NewStore(pool),
+			db:        pool,
+			keys:      keys,
+			intents:   paymentintent.NewService(paymentintent.NewStore(pool), network, 200*time.Millisecond, logger),
+			refunds:   refund.NewService(pool, network, 200*time.Millisecond, logger),
+			customers: customer.NewStore(pool),
+			balances:  ledger.NewReader(pool),
+			idem:      idempotency.NewStore(pool),
 		})))),
 		testKey:          issue(acme, apikey.ModeTest),
 		liveKey:          issue(acme, apikey.ModeLive),
