@@ -35,6 +35,22 @@ Every POST accepts an `Idempotency-Key` header. A retry with the same key and pa
 returns the first response (with `Idempotent-Replayed: true`) instead of doing the work twice; the same key
 with different parameters is rejected.
 
+### Test cards
+
+In test mode, pass one of these as `payment_method`. The built-in fake card network decides the outcome
+from the card behind it.
+
+| payment_method | Outcome |
+|---|---|
+| `pm_card_visa`, `pm_card_mastercard` | Approved |
+| `pm_card_chargeDeclined` | Declined, `generic_decline` |
+| `pm_card_chargeDeclinedInsufficientFunds` | Declined, `insufficient_funds` |
+| `pm_card_chargeDeclinedLostCard` | Declined, `lost_card` |
+| `pm_card_chargeDeclinedExpiredCard` | Declined, `expired_card` |
+| `pm_card_chargeDeclinedIncorrectCvc` | Declined, `incorrect_cvc` |
+| `pm_card_chargeDeclinedProcessingError` | Declined, `processing_error` |
+| `pm_card_timeout` | The network approves but its answer never arrives (outcome unknown) |
+
 ## Deploy
 
 See [docs/deploy.md](docs/deploy.md): `compose.prod.yaml` runs Postgres, migrations, the API and Caddy (HTTPS) on one VM.
