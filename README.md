@@ -20,6 +20,10 @@ go run ./cmd/admin issue-key -merchant 1 -mode test                    # prints 
 curl -H "Authorization: Bearer sk_test_..." localhost:8080/v1/account
 ```
 
+## Deploy
+
+See [docs/deploy.md](docs/deploy.md): `compose.prod.yaml` runs Postgres, migrations, the API and Caddy (HTTPS) on one VM.
+
 ## Test
 
 ```sh
