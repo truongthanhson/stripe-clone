@@ -15,6 +15,7 @@ import (
 	"github.com/jackc/pgx/v5/pgxpool"
 
 	"github.com/truongthanhson/stripe-clone/internal/apikey"
+	"github.com/truongthanhson/stripe-clone/internal/idempotency"
 	"github.com/truongthanhson/stripe-clone/internal/paymentintent"
 )
 
@@ -40,12 +41,16 @@ func run(logger *slog.Logger) error {
 	}
 	defer pool.Close()
 
+	idem := idempotency.NewStore(pool)
+	go pruneIdempotencyKeys(logger, idem)
+
 	srv := &http.Server{
 		Addr: addr,
 		Handler: withRequestLogging(logger, newRouter(app{
 			db:      pool,
 			keys:    apikey.NewStore(pool),
 			intents: paymentintent.NewStore(pool),
+			idem:    idem,
 		})),
 		ReadHeaderTimeout: 5 * time.Second,
 		ReadTimeout:       10 * time.Second,
@@ -77,6 +82,18 @@ func run(logger *slog.Logger) error {
 	return srv.Shutdown(shutdownCtx)
 }
 
+// pruneIdempotencyKeys deletes expired keys hourly so the table stays small.
+func pruneIdempotencyKeys(logger *slog.Logger, store *idempotency.Store) {
+	for range time.Tick(time.Hour) {
+		n, err := store.Prune(context.Background())
+		if err != nil {
+			logger.Error("prune idempotency keys", "error", err)
+			continue
+		}
+		logger.Info("pruned idempotency keys", "deleted", n)
+	}
+}
+
 type pinger interface {
 	Ping(ctx context.Context) error
 }
@@ -86,15 +103,19 @@ type app struct {
 	db      pinger
 	keys    keyLookup
 	intents intentStore
+	idem    idempotencyStore // nil disables Idempotency-Key handling
 }
 
 func newRouter(a app) http.Handler {
 	authed := func(h http.HandlerFunc) http.Handler { return requireAPIKey(a.keys, h) }
+	authedPost := func(h http.HandlerFunc) http.Handler {
+		return requireAPIKey(a.keys, withIdempotency(a.idem, h))
+	}
 
 	mux := http.NewServeMux()
 	mux.HandleFunc("GET /healthz", handleHealthz(a.db))
 	mux.Handle("GET /v1/account", authed(handleAccount))
-	mux.Handle("POST /v1/payment_intents", authed(handleCreateIntent(a.intents)))
+	mux.Handle("POST /v1/payment_intents", authedPost(handleCreateIntent(a.intents)))
 	mux.Handle("GET /v1/payment_intents/{id}", authed(handleGetIntent(a.intents)))
 	return mux
 }

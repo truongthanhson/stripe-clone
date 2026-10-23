@@ -31,6 +31,10 @@ curl localhost:8080/v1/payment_intents -H "Authorization: Bearer sk_test_..." \
 curl localhost:8080/v1/payment_intents/pi_... -H "Authorization: Bearer sk_test_..."
 ```
 
+Every POST accepts an `Idempotency-Key` header. A retry with the same key and parameters within 24 hours
+returns the first response (with `Idempotent-Replayed: true`) instead of doing the work twice; the same key
+with different parameters is rejected.
+
 ## Deploy
 
 See [docs/deploy.md](docs/deploy.md): `compose.prod.yaml` runs Postgres, migrations, the API and Caddy (HTTPS) on one VM.
