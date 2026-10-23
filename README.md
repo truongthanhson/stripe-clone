@@ -129,3 +129,22 @@ See [docs/deploy.md](docs/deploy.md): `compose.prod.yaml` runs Postgres, migrati
 ```sh
 go test ./...   # the migrations test starts its own Postgres via testcontainers, so Docker must be running
 ```
+
+The gate tests are the ones that prove the big guarantees: `TestE2EPhase1Gate` (50 concurrent retries
+of one payment charge the card once) and `TestE2EPhase2Gate` (thousands of random charges, captures
+and refunds keep the ledger balanced; `GATE_SEED` and `GATE_OPS` replay or scale a run).
+
+### Smoke test a running server
+
+`scripts/smoke.sh` walks every feature over real HTTP with `curl` and `jq`: charges, declines,
+idempotent retries, auth and capture, cancel, timeouts, pagination, refunds, balance, API versions
+and customers. It creates its own data, so it can run again on the same database.
+
+```sh
+go run ./cmd/admin create-merchant -name Smoke -email smoke@test.local
+SK=$(go run ./cmd/admin issue-key -merchant 1 -mode test | head -1)
+go run ./cmd/api &
+SK=$SK scripts/smoke.sh                       # BASE_URL=https://... scripts/smoke.sh for a deployed server
+```
+
+It exits non-zero on the first broken check and prints the response that broke it.
