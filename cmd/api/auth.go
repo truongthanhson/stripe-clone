@@ -49,11 +49,7 @@ func requireAPIKey(keys keyLookup, next http.Handler) http.Handler {
 			writeError(w, http.StatusUnauthorized, errInvalidKey)
 			return
 		case err != nil:
-			loggerFrom(r.Context()).Error("api key lookup failed", "error", err)
-			writeError(w, http.StatusInternalServerError, apiError{
-				Type:    "api_error",
-				Message: "Something went wrong on our end.",
-			})
+			writeInternalError(w, r, "api key lookup failed", err)
 			return
 		}
 
