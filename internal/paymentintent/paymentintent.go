@@ -61,6 +61,7 @@ type PaymentIntent struct {
 	CaptureMethod CaptureMethod
 	Description   *string
 	PaymentMethod *string
+	Metadata      map[string]string
 	Created       time.Time
 
 	AmountCapturable   int64 // authorized and not yet captured
@@ -93,6 +94,13 @@ type CreateParams struct {
 	CaptureMethod CaptureMethod // empty means automatic
 	Description   *string
 	PaymentMethod *string
+	Metadata      MetadataUpdate
+}
+
+// UpdateParams changes the fields a merchant may edit at any status. Nil means unchanged.
+type UpdateParams struct {
+	Description *string
+	Metadata    *MetadataUpdate
 }
 
 // StateError means the action is not allowed in the PaymentIntent's current status.
@@ -160,7 +168,11 @@ func (p *CreateParams) Validate() error {
 		return &ValidationError{"amount", "amount_too_large",
 			fmt.Sprintf("Amount must be no more than %d.", MaxAmount)}
 	}
-	if p.Description != nil && len(*p.Description) > 1000 {
+	return validateDescription(p.Description)
+}
+
+func validateDescription(d *string) error {
+	if d != nil && len(*d) > 1000 {
 		return &ValidationError{"description", "parameter_invalid_string", "Description must be at most 1000 characters."}
 	}
 	return nil
