@@ -173,12 +173,9 @@ func handleListIntents(store intentStore) http.HandlerFunc {
 		p := principalFrom(r.Context())
 		page, hasMore, err := store.List(r.Context(), p.MerchantID, p.Livemode(), params)
 		if errors.Is(err, paymentintent.ErrNotFound) {
-			param, id := "starting_after", params.StartingAfter
-			if params.EndingBefore != "" {
-				param, id = "ending_before", params.EndingBefore
-			}
+			id, _ := params.Cursor()
 			e := noSuchIntent(id)
-			e.Param = param
+			e.Param = cursorParam(params)
 			writeError(w, http.StatusNotFound, e)
 			return
 		}

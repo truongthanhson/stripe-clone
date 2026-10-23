@@ -224,6 +224,51 @@ paths:
               schema: { $ref: "#/components/schemas/PaymentIntent" }
         default: { $ref: "#/components/responses/Error" }
 
+  /v1/balance:
+    get:
+      operationId: GetBalance
+      summary: The merchant's balance per currency, derived from the ledger
+      responses:
+        "200":
+          description: The balance.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/Balance" }
+        default: { $ref: "#/components/responses/Error" }
+
+  /v1/balance_transactions:
+    get:
+      operationId: ListBalanceTransactions
+      summary: Every change to the merchant's balance, newest first
+      parameters:
+        - $ref: "#/components/parameters/Limit"
+        - $ref: "#/components/parameters/StartingAfter"
+        - $ref: "#/components/parameters/EndingBefore"
+      responses:
+        "200":
+          description: A page of balance transactions.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/BalanceTransactionList" }
+        default: { $ref: "#/components/responses/Error" }
+
+  /v1/balance_transactions/{id}:
+    parameters:
+      - name: id
+        in: path
+        required: true
+        schema: { type: string }
+    get:
+      operationId: GetBalanceTransaction
+      summary: Retrieve a balance transaction
+      responses:
+        "200":
+          description: The balance transaction.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/BalanceTransaction" }
+        default: { $ref: "#/components/responses/Error" }
+
 components:
   securitySchemes:
     bearerAuth:
@@ -354,6 +399,59 @@ components:
         data:
           type: array
           items: { $ref: "#/components/schemas/PaymentIntent" }
+
+    Money:
+      type: object
+      additionalProperties: false
+      required: [amount, currency]
+      properties:
+        amount: { type: integer }
+        currency: { type: string, pattern: "^[a-z]{3}$" }
+
+    Balance:
+      type: object
+      additionalProperties: false
+      required: [object, available, livemode, pending]
+      properties:
+        object: { type: string, enum: [balance] }
+        available:
+          type: array
+          description: Funds that can be paid out (filled by payouts, Phase 4).
+          items: { $ref: "#/components/schemas/Money" }
+        livemode: { type: boolean }
+        pending:
+          type: array
+          description: Funds from charges, net of fees, not yet available.
+          items: { $ref: "#/components/schemas/Money" }
+
+    BalanceTransaction:
+      type: object
+      additionalProperties: false
+      required: [id, object, amount, created, currency, description, fee, net, source, status, type]
+      properties:
+        id: { type: string, pattern: "^txn_" }
+        object: { type: string, enum: [balance_transaction] }
+        amount: { type: integer, description: "Gross amount: net + fee. Negative for money leaving the balance." }
+        created: { type: integer }
+        currency: { type: string }
+        description: { type: string }
+        fee: { type: integer, description: "Kept by the platform." }
+        net: { type: integer, description: "The change to the merchant's balance." }
+        source: { type: string, description: "The object that caused it: a PaymentIntent or a Refund." }
+        status: { type: string, enum: [pending, available] }
+        type: { type: string, enum: [charge, refund] }
+
+    BalanceTransactionList:
+      type: object
+      additionalProperties: false
+      required: [object, url, has_more, data]
+      properties:
+        object: { type: string, enum: [list] }
+        url: { type: string }
+        has_more: { type: boolean }
+        data:
+          type: array
+          items: { $ref: "#/components/schemas/BalanceTransaction" }
 
     Error:
       type: object

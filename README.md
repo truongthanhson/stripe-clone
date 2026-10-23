@@ -55,6 +55,13 @@ curl localhost:8080/v1/payment_intents/pi_... -H "Authorization: Bearer sk_test_
   -d "metadata[order_id]=6735" -d "metadata[old_key]="                               # sets order_id, removes old_key
 ```
 
+Every captured charge is recorded in a double-entry ledger; the balance and its history are read from it:
+
+```sh
+curl localhost:8080/v1/balance -H "Authorization: Bearer sk_test_..."                 # pending: [{"amount": 1912, "currency": "usd"}]
+curl localhost:8080/v1/balance_transactions -H "Authorization: Bearer sk_test_..."    # one per charge: amount, fee, net, source
+```
+
 A declined card returns `402` with `{"error": {"type": "card_error", "code": "card_declined", "decline_code": ..., "payment_intent": {...}}}`;
 the PaymentIntent goes back to `requires_payment_method` and can be confirmed again with another card.
 

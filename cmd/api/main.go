@@ -17,6 +17,7 @@ import (
 	"github.com/truongthanhson/stripe-clone/internal/apikey"
 	"github.com/truongthanhson/stripe-clone/internal/cardnetwork"
 	"github.com/truongthanhson/stripe-clone/internal/idempotency"
+	"github.com/truongthanhson/stripe-clone/internal/ledger"
 	"github.com/truongthanhson/stripe-clone/internal/paymentintent"
 )
 
@@ -52,10 +53,11 @@ func run(logger *slog.Logger) error {
 	srv := &http.Server{
 		Addr: addr,
 		Handler: withRequestLogging(logger, newRouter(app{
-			db:      pool,
-			keys:    apikey.NewStore(pool),
-			intents: paymentintent.NewService(paymentintent.NewStore(pool), cardnetwork.NewFake(), networkTimeout, logger),
-			idem:    idem,
+			db:       pool,
+			keys:     apikey.NewStore(pool),
+			intents:  paymentintent.NewService(paymentintent.NewStore(pool), cardnetwork.NewFake(), networkTimeout, logger),
+			balances: ledger.NewReader(pool),
+			idem:     idem,
 		})),
 		ReadHeaderTimeout: 5 * time.Second,
 		ReadTimeout:       10 * time.Second,
@@ -105,10 +107,11 @@ type pinger interface {
 
 // app holds the dependencies the handlers need; tests fill it with fakes.
 type app struct {
-	db      pinger
-	keys    keyLookup
-	intents intentStore
-	idem    idempotencyStore // nil disables Idempotency-Key handling
+	db       pinger
+	keys     keyLookup
+	intents  intentStore
+	balances balanceStore
+	idem     idempotencyStore // nil disables Idempotency-Key handling
 }
 
 // route is one endpoint. Keeping the table as data lets a test compare it with openapi.yaml.
@@ -138,6 +141,9 @@ func routes(a app) []route {
 		{"POST /v1/payment_intents/{id}/confirm", authedPost(handleConfirmIntent(a.intents))},
 		{"POST /v1/payment_intents/{id}/capture", authedPost(handleCaptureIntent(a.intents))},
 		{"POST /v1/payment_intents/{id}/cancel", authedPost(handleCancelIntent(a.intents))},
+		{"GET /v1/balance", authed(handleGetBalance(a.balances))},
+		{"GET /v1/balance_transactions", authed(handleListBalanceTransactions(a.balances))},
+		{"GET /v1/balance_transactions/{id}", authed(handleGetBalanceTransaction(a.balances))},
 	}
 }
 
