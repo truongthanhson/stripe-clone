@@ -230,13 +230,12 @@ func TestE2EDashboardPayments(t *testing.T) {
 		path := "/dashboard/payments/" + paid.ID
 		page := b.get(path).Body.String()
 		token := regexp.MustCompile(`name="refund_token" value="([^"]+)"`).FindStringSubmatch(page)[1]
-		form := url.Values{"amount": {"12.00"}, "reason": {"requested_by_customer"}, "refund_token": {token}}
 		var wg sync.WaitGroup
 		for range 5 {
 			wg.Add(1)
 			go func() {
 				defer wg.Done()
-				b.submit(path+"/refunds", form)
+				b.submit(path+"/refunds", url.Values{"amount": {"12.00"}, "reason": {"requested_by_customer"}, "refund_token": {token}})
 			}()
 		}
 		wg.Wait()
