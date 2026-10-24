@@ -62,43 +62,53 @@ func (s *Service) Confirm(ctx context.Context, merchantID int64, livemode bool, 
 		return PaymentIntent{}, err
 	}
 
+	return s.authorize(ctx, pi, card)
+}
+
+// authorize asks the network to authorize pi's current attempt and records the answer. It is also
+// how the resolver finishes an attempt whose answer was lost: the network deduplicates on the
+// attempt's reference, so asking again returns the original answer instead of placing a second hold.
+func (s *Service) authorize(ctx context.Context, pi PaymentIntent, card cardnetwork.Card) (PaymentIntent, error) {
 	nctx, cancel := s.networkContext(ctx)
 	defer cancel()
 	auth, err := s.network.Authorize(nctx, cardnetwork.AuthorizeRequest{
 		Reference: pi.networkReference(), Card: card, Amount: pi.Amount, Currency: pi.Currency,
 	})
 	if err != nil {
-		// Outcome unknown: the card may be charged. Stay in processing; never guess "declined".
-		// Phase 3 adds the job that asks the network again with the same reference and settles it.
+		// Outcome unknown: the card may be held. Stay processing, say so, and never guess "declined".
 		s.logger.Warn("authorize outcome unknown; payment intent left processing", "payment_intent", pi.ID, "error", err)
-		return pi, nil
+		return s.markUnresolved(ctx, pi.ID, StatusProcessing, OpAuthorize, 0, nil)
 	}
-
 	if !auth.Approved {
 		pi, err = s.transition(ctx, pi.ID, StatusProcessing, StatusRequiresPaymentMethod,
-			`payment_method = NULL, last_payment_error = $4`, declineError(auth.DeclineCode, *paymentMethod))
+			`payment_method = NULL, last_payment_error = $4`, declineError(auth.DeclineCode, *pi.PaymentMethod))
 		if err != nil {
 			return PaymentIntent{}, err
 		}
 		return PaymentIntent{}, &DeclineError{Intent: pi}
 	}
-
 	if pi.CaptureMethod == CaptureManual {
 		return s.transition(ctx, pi.ID, StatusProcessing, StatusRequiresCapture,
 			`authorization_id = $4, amount_capturable = amount`, auth.ID)
 	}
+	return s.captureAuthorized(ctx, pi, auth.ID)
+}
 
-	if err := s.network.Capture(nctx, auth.ID, pi.Amount); err != nil {
-		// Authorized but capture unknown. Record the authorization so the Phase 3 resolver can finish it.
+// captureAuthorized captures the whole amount of an automatic-capture PaymentIntent that the network
+// approved, and records it with its ledger posting.
+func (s *Service) captureAuthorized(ctx context.Context, pi PaymentIntent, authorizationID string) (PaymentIntent, error) {
+	nctx, cancel := s.networkContext(ctx)
+	defer cancel()
+	if err := s.network.Capture(nctx, authorizationID, pi.Amount); err != nil {
 		s.logger.Warn("capture outcome unknown; payment intent left processing", "payment_intent", pi.ID, "error", err)
-		return s.transition(ctx, pi.ID, StatusProcessing, StatusProcessing, `authorization_id = $4`, auth.ID)
+		return s.markUnresolved(ctx, pi.ID, StatusProcessing, OpCapture, pi.Amount, &authorizationID)
 	}
-	amount := pi.Amount
-	pi, err = s.succeed(ctx, pi.ID, StatusProcessing, `authorization_id = $4, amount_received = amount`, auth.ID)
+	done, err := s.succeed(ctx, pi.ID, StatusProcessing, `authorization_id = $4, amount_received = amount`, authorizationID)
 	if err != nil {
-		s.logger.Error("captured on the network but not recorded", "payment_intent", id, "amount", amount, "error", err)
+		s.logger.Error("captured on the network but not recorded", "payment_intent", pi.ID, "amount", pi.Amount, "error", err)
+		_, _ = s.markUnresolved(ctx, pi.ID, StatusProcessing, OpCapture, pi.Amount, &authorizationID)
 	}
-	return pi, err
+	return done, err
 }
 
 // Capture takes the authorized money of a requires_capture PaymentIntent. amount defaults to all of
@@ -112,6 +122,14 @@ func (s *Service) Capture(ctx context.Context, merchantID int64, livemode bool, 
 		return PaymentIntent{}, &StateError{Action: "capture", Status: pi.Status}
 	}
 	toCapture := pi.AmountCapturable
+	if u := pi.Unresolved; u != nil {
+		// The bank may already have acted on an earlier capture or void. Only repeating that same
+		// call is safe; it is idempotent and tells us what happened.
+		if u.Op != OpCapture || (amount != nil && *amount != u.Amount) {
+			return PaymentIntent{}, &PendingError{Op: u.Op, Amount: u.Amount}
+		}
+		amount = &u.Amount
+	}
 	if amount != nil {
 		toCapture = *amount
 	}
@@ -134,7 +152,10 @@ func (s *Service) Capture(ctx context.Context, merchantID int64, livemode bool, 
 		if errors.Is(err, cardnetwork.ErrInvalidState) {
 			return PaymentIntent{}, s.stateErrorNow(ctx, merchantID, livemode, id, "capture")
 		}
-		s.logger.Warn("capture failed", "payment_intent", pi.ID, "error", err)
+		s.logger.Warn("capture outcome unknown", "payment_intent", pi.ID, "error", err)
+		if _, err := s.markUnresolved(ctx, pi.ID, StatusRequiresCapture, OpCapture, toCapture, nil); err != nil && !errors.Is(err, ErrStaleStatus) {
+			return PaymentIntent{}, err
+		}
 		return PaymentIntent{}, ErrNetworkUnavailable
 	}
 	pi, err = s.succeed(ctx, pi.ID, StatusRequiresCapture, `amount_received = $4, amount_capturable = 0`, toCapture)
@@ -142,9 +163,10 @@ func (s *Service) Capture(ctx context.Context, merchantID int64, livemode bool, 
 		return PaymentIntent{}, s.stateErrorNow(ctx, merchantID, livemode, id, "capture")
 	}
 	if err != nil {
-		// The network moved the money but we could not record it. A retry of the same capture is
-		// safe (the network capture is idempotent); Phase 3's resolver will also catch these.
+		// The network moved the money but we could not record it. Mark it so the resolver repeats the
+		// (idempotent) capture and records it; if even the mark fails, a retry of the capture does the same.
 		s.logger.Error("captured on the network but not recorded", "payment_intent", id, "amount", toCapture, "error", err)
+		_, _ = s.markUnresolved(ctx, id, StatusRequiresCapture, OpCapture, toCapture, nil)
 	}
 	return pi, err
 }
@@ -166,6 +188,10 @@ func (s *Service) Cancel(ctx context.Context, merchantID int64, livemode bool, i
 		return PaymentIntent{}, &StateError{Action: "cancel", Status: pi.Status}
 	}
 
+	if u := pi.Unresolved; u != nil && u.Op != OpVoid {
+		return PaymentIntent{}, &PendingError{Op: u.Op, Amount: u.Amount}
+	}
+
 	if pi.Status == StatusRequiresCapture {
 		nctx, cancel := s.networkContext(ctx)
 		defer cancel()
@@ -173,7 +199,10 @@ func (s *Service) Cancel(ctx context.Context, merchantID int64, livemode bool, i
 			if errors.Is(err, cardnetwork.ErrInvalidState) {
 				return PaymentIntent{}, s.stateErrorNow(ctx, merchantID, livemode, id, "cancel")
 			}
-			s.logger.Warn("void failed", "payment_intent", pi.ID, "error", err)
+			s.logger.Warn("void outcome unknown", "payment_intent", pi.ID, "error", err)
+			if _, err := s.markUnresolved(ctx, pi.ID, StatusRequiresCapture, OpVoid, 0, nil); err != nil && !errors.Is(err, ErrStaleStatus) {
+				return PaymentIntent{}, err
+			}
 			return PaymentIntent{}, ErrNetworkUnavailable
 		}
 	}
@@ -183,6 +212,61 @@ func (s *Service) Cancel(ctx context.Context, merchantID int64, livemode bool, i
 		return PaymentIntent{}, s.stateErrorNow(ctx, merchantID, livemode, id, "cancel")
 	}
 	return pi, err
+}
+
+// ResolveUnknown settles PaymentIntents whose last network call got no answer, by repeating that
+// call: every network operation is idempotent, so a repeat returns the outcome of the original if it
+// reached the bank, and performs it if it did not. A PaymentIntent left processing for longer than
+// grace without a mark (its process died mid-call) is treated the same way. It returns how many
+// were settled; those whose repeat got no answer either are left for the next run.
+func (s *Service) ResolveUnknown(ctx context.Context, grace time.Duration) (int, error) {
+	ids, err := s.unresolvedIDs(ctx, grace, 100)
+	if err != nil {
+		return 0, err
+	}
+	settled := 0
+	for _, id := range ids {
+		pi, err := s.getByID(ctx, id)
+		if err != nil {
+			return settled, err
+		}
+		err = s.resolve(ctx, pi)
+		var decline *DeclineError
+		var pending *PendingError
+		switch {
+		case err == nil, errors.As(err, &decline):
+		case errors.Is(err, ErrNetworkUnavailable), errors.Is(err, ErrStaleStatus), errors.As(err, &pending):
+			continue // still unknown, or someone else got there first
+		default:
+			return settled, fmt.Errorf("resolve %s: %w", id, err)
+		}
+		if pi, err = s.getByID(ctx, id); err != nil {
+			return settled, err
+		}
+		if pi.Unresolved == nil && pi.Status != StatusProcessing {
+			settled++
+		}
+	}
+	return settled, nil
+}
+
+func (s *Service) resolve(ctx context.Context, pi PaymentIntent) error {
+	var err error
+	switch {
+	case pi.Status == StatusProcessing && pi.AuthorizationID == nil:
+		card, cerr := resolveCard(pi.Livemode, pi.PaymentMethod)
+		if cerr != nil {
+			return cerr
+		}
+		_, err = s.authorize(ctx, pi, card)
+	case pi.Status == StatusProcessing:
+		_, err = s.captureAuthorized(ctx, pi, *pi.AuthorizationID)
+	case pi.Status == StatusRequiresCapture && pi.Unresolved != nil && pi.Unresolved.Op == OpCapture:
+		_, err = s.Capture(ctx, pi.MerchantID, pi.Livemode, pi.ID, nil)
+	case pi.Status == StatusRequiresCapture && pi.Unresolved != nil && pi.Unresolved.Op == OpVoid:
+		_, err = s.Cancel(ctx, pi.MerchantID, pi.Livemode, pi.ID, nil)
+	}
+	return err
 }
 
 // stateErrorNow reports the status a concurrent request left the PaymentIntent in.

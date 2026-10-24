@@ -238,8 +238,11 @@ func actionError(err error) (int, string, bool) {
 		ve  *paymentintent.ValidationError
 		se  *paymentintent.StateError
 		rve *refund.ValidationError
+		pe  *paymentintent.PendingError
 	)
 	switch {
+	case errors.As(err, &pe):
+		return http.StatusConflict, pe.Error(), true
 	case errors.As(err, &ve):
 		return http.StatusUnprocessableEntity, ve.Message, true
 	case errors.As(err, &rve):

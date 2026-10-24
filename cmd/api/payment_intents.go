@@ -261,9 +261,12 @@ func writeIntentError(w http.ResponseWriter, r *http.Request, err error) {
 		ve      *paymentintent.ValidationError
 		se      *paymentintent.StateError
 		decline *paymentintent.DeclineError
+		pending *paymentintent.PendingError
 		me      *metadata.Error
 	)
 	switch {
+	case errors.As(err, &pending):
+		writeError(w, http.StatusConflict, apiError{Type: "invalid_request_error", Code: "payment_intent_outcome_pending", Message: pending.Error()})
 	case errors.As(err, &me):
 		writeError(w, http.StatusBadRequest, apiError{Type: "invalid_request_error", Code: "parameter_invalid_metadata", Param: me.Param, Message: me.Message})
 	case errors.As(err, &ve):

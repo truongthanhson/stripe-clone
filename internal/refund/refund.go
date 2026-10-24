@@ -175,9 +175,15 @@ func (s *Service) Create(ctx context.Context, merchantID int64, livemode bool, p
 		return Refund{}, err
 	}
 
+	return s.send(ctx, re, authorizationID)
+}
+
+// send asks the network to make the refund and records the answer. The network deduplicates on the
+// refund's ID, so sending it again after a lost answer is safe: that is how ResolveUnknown works.
+func (s *Service) send(ctx context.Context, re Refund, authorizationID string) (Refund, error) {
 	nctx, cancel := context.WithTimeout(context.WithoutCancel(ctx), s.timeout)
 	defer cancel()
-	err = s.network.Refund(nctx, cardnetwork.RefundRequest{Reference: re.ID, AuthorizationID: authorizationID, Amount: re.Amount})
+	err := s.network.Refund(nctx, cardnetwork.RefundRequest{Reference: re.ID, AuthorizationID: authorizationID, Amount: re.Amount})
 	switch {
 	case errors.Is(err, cardnetwork.ErrRefundFailed):
 		return s.fail(ctx, re.ID, "expired_or_canceled_card")
@@ -187,15 +193,17 @@ func (s *Service) Create(ctx context.Context, merchantID int64, livemode bool, p
 		s.logger.Error("network refused refund", "refund", re.ID, "error", err)
 		return s.fail(ctx, re.ID, "unknown")
 	case err != nil:
-		// Unknown outcome: keep the amount reserved and the refund pending. Never guess.
+		// Unknown outcome: keep the amount reserved and the refund pending, and say why. Never guess.
 		s.logger.Warn("refund outcome unknown; refund left pending", "refund", re.ID, "error", err)
-		return re, nil
+		_, err = s.pool.Exec(ctx, `UPDATE refunds SET unresolved_since = COALESCE(unresolved_since, now()), updated_at = now()
+			WHERE id = $1 AND status = 'pending'`, re.ID)
+		return re, err
 	}
 
 	err = pgx.BeginFunc(ctx, s.pool, func(tx pgx.Tx) error {
 		var err error
 		re, err = scan(tx.QueryRow(ctx, `
-			UPDATE refunds SET status = 'succeeded', updated_at = now()
+			UPDATE refunds SET status = 'succeeded', unresolved_since = NULL, updated_at = now()
 			WHERE id = $1 AND status = 'pending' RETURNING `+columns, re.ID))
 		if err != nil {
 			return err
@@ -208,12 +216,53 @@ func (s *Service) Create(ctx context.Context, merchantID int64, livemode bool, p
 	return re, err
 }
 
+// ResolveUnknown sends again every refund whose answer was lost, and every refund pending for longer
+// than grace (its process died mid-call). It returns how many reached a final status.
+func (s *Service) ResolveUnknown(ctx context.Context, grace time.Duration) (int, error) {
+	rows, err := s.pool.Query(ctx, `
+		SELECT r.id, p.authorization_id FROM refunds r JOIN payment_intents p ON p.id = r.payment_intent_id
+		WHERE r.status = 'pending' AND (r.unresolved_since IS NOT NULL OR r.created_at < now() - $1::int * interval '1 millisecond')
+		ORDER BY r.created_at LIMIT 100`, int(grace.Milliseconds()))
+	if err != nil {
+		return 0, err
+	}
+	type unknown struct {
+		id, authorizationID string
+	}
+	todo, err := pgx.CollectRows(rows, func(row pgx.CollectableRow) (unknown, error) {
+		var u unknown
+		err := row.Scan(&u.id, &u.authorizationID)
+		return u, err
+	})
+	if err != nil {
+		return 0, err
+	}
+	settled := 0
+	for _, u := range todo {
+		re, err := scan(s.pool.QueryRow(ctx, `SELECT `+columns+` FROM refunds WHERE id = $1`, u.id))
+		if err != nil {
+			return settled, err
+		}
+		re, err = s.send(ctx, re, u.authorizationID)
+		if errors.Is(err, ErrNotFound) {
+			continue // settled concurrently
+		}
+		if err != nil {
+			return settled, err
+		}
+		if re.Status != StatusPending {
+			settled++
+		}
+	}
+	return settled, nil
+}
+
 func (s *Service) fail(ctx context.Context, id, reason string) (Refund, error) {
 	var re Refund
 	err := pgx.BeginFunc(ctx, s.pool, func(tx pgx.Tx) error {
 		var err error
 		re, err = scan(tx.QueryRow(ctx, `
-			UPDATE refunds SET status = 'failed', failure_reason = $2, updated_at = now()
+			UPDATE refunds SET status = 'failed', failure_reason = $2, unresolved_since = NULL, updated_at = now()
 			WHERE id = $1 AND status = 'pending' RETURNING `+columns, id, reason))
 		if err != nil {
 			return err

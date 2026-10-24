@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"time"
 
 	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgxpool"
@@ -48,16 +49,26 @@ func NewStore(pool *pgxpool.Pool) *Store {
 }
 
 const columns = `id, merchant_id, livemode, amount, currency, status, capture_method, description, payment_method, customer_id, metadata, created_at,
-	amount_capturable, amount_received, attempts, authorization_id, last_payment_error, canceled_at, cancellation_reason`
+	amount_capturable, amount_received, attempts, authorization_id, last_payment_error, canceled_at, cancellation_reason,
+	unresolved_op, unresolved_amount, unresolved_since`
 
 func scan(row pgx.Row) (PaymentIntent, error) {
 	var pi PaymentIntent
+	var op *Op
+	var amount *int64
+	var since *time.Time
 	err := row.Scan(&pi.ID, &pi.MerchantID, &pi.Livemode, &pi.Amount, &pi.Currency, &pi.Status,
 		&pi.CaptureMethod, &pi.Description, &pi.PaymentMethod, &pi.Customer, &pi.Metadata, &pi.Created,
 		&pi.AmountCapturable, &pi.AmountReceived, &pi.Attempts, &pi.AuthorizationID, &pi.LastPaymentError,
-		&pi.CanceledAt, &pi.CancellationReason)
+		&pi.CanceledAt, &pi.CancellationReason, &op, &amount, &since)
 	if errors.Is(err, pgx.ErrNoRows) {
 		return PaymentIntent{}, ErrNotFound
+	}
+	if op != nil {
+		pi.Unresolved = &Unresolved{Op: *op, Since: *since}
+		if amount != nil {
+			pi.Unresolved.Amount = *amount
+		}
 	}
 	return pi, err
 }
@@ -230,8 +241,9 @@ func transitionWith(ctx context.Context, q querier, id string, from, to Status, 
 	if set != "" {
 		set = ", " + set
 	}
+	// Any recorded outcome settles what was unknown.
 	pi, err := scan(q.QueryRow(ctx,
-		`UPDATE payment_intents SET status = $2, updated_at = now()`+set+`
+		`UPDATE payment_intents SET status = $2, updated_at = now(), unresolved_op = NULL, unresolved_amount = NULL, unresolved_since = NULL`+set+`
 		 WHERE id = $1 AND status = $3 RETURNING `+columns,
 		append([]any{id, to, from}, args...)...,
 	))
@@ -239,4 +251,35 @@ func transitionWith(ctx context.Context, q querier, id string, from, to Status, 
 		return PaymentIntent{}, fmt.Errorf("%w: %s expected %s", ErrStaleStatus, id, from)
 	}
 	return pi, err
+}
+
+// markUnresolved records that a network call about the PaymentIntent got no answer. The status is
+// asserted, not changed; authorizationID, when set, is recorded too (it is known before a capture).
+func (s *Store) markUnresolved(ctx context.Context, id string, status Status, op Op, amount int64, authorizationID *string) (PaymentIntent, error) {
+	pi, err := scan(s.pool.QueryRow(ctx, `
+		UPDATE payment_intents SET unresolved_op = $3, unresolved_amount = NULLIF($4, 0),
+			unresolved_since = COALESCE(unresolved_since, now()), authorization_id = COALESCE($5, authorization_id), updated_at = now()
+		WHERE id = $1 AND status = $2 RETURNING `+columns, id, status, op, amount, authorizationID))
+	if errors.Is(err, ErrNotFound) {
+		return PaymentIntent{}, fmt.Errorf("%w: %s expected %s", ErrStaleStatus, id, status)
+	}
+	return pi, err
+}
+
+// unresolvedIDs returns PaymentIntents whose last network call has no known outcome, and those left
+// processing for longer than grace (a process that died mid-call never marked them).
+func (s *Store) unresolvedIDs(ctx context.Context, grace time.Duration, limit int) ([]string, error) {
+	rows, err := s.pool.Query(ctx, `
+		SELECT id FROM payment_intents WHERE unresolved_op IS NOT NULL
+		UNION
+		SELECT id FROM payment_intents WHERE status = 'processing' AND updated_at < now() - $1::int * interval '1 millisecond'
+		LIMIT $2`, int(grace.Milliseconds()), limit)
+	if err != nil {
+		return nil, err
+	}
+	return pgx.CollectRows(rows, pgx.RowTo[string])
+}
+
+func (s *Store) getByID(ctx context.Context, id string) (PaymentIntent, error) {
+	return scan(s.pool.QueryRow(ctx, `SELECT `+columns+` FROM payment_intents WHERE id = $1`, id))
 }
