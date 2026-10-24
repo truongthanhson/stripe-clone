@@ -16,6 +16,7 @@ import (
 
 	"github.com/truongthanhson/stripe-clone/internal/apikey"
 	"github.com/truongthanhson/stripe-clone/internal/cardnetwork"
+	"github.com/truongthanhson/stripe-clone/internal/checkout"
 	"github.com/truongthanhson/stripe-clone/internal/customer"
 	"github.com/truongthanhson/stripe-clone/internal/idempotency"
 	"github.com/truongthanhson/stripe-clone/internal/ledger"
@@ -54,17 +55,20 @@ func run(logger *slog.Logger) error {
 	network := cardnetwork.NewFake()
 	idem := idempotency.NewStore(pool)
 	go pruneIdempotencyKeys(logger, idem)
+	intents := paymentintent.NewService(paymentintent.NewStore(pool), network, networkTimeout, logger)
 
 	srv := &http.Server{
 		Addr: addr,
 		Handler: withRequestLogging(logger, newRouter(app{
 			db:        pool,
 			keys:      apikey.NewStore(pool),
-			intents:   paymentintent.NewService(paymentintent.NewStore(pool), network, networkTimeout, logger),
+			intents:   intents,
 			refunds:   refund.NewService(pool, network, networkTimeout, logger),
 			customers: customer.NewStore(pool),
 			balances:  ledger.NewReader(pool),
 			idem:      idem,
+			checkout:  checkout.NewService(pool, intents),
+			publicURL: getenv("PUBLIC_URL", "http://localhost"+addr),
 		})),
 		ReadHeaderTimeout: 5 * time.Second,
 		ReadTimeout:       10 * time.Second,
@@ -121,6 +125,8 @@ type app struct {
 	refunds   refundStore
 	customers customerStore
 	idem      idempotencyStore // nil disables Idempotency-Key handling
+	checkout  checkoutStore
+	publicURL string // where browsers reach this server, for hosted page links
 }
 
 // route is one endpoint. Keeping the table as data lets a test compare it with openapi.yaml.
@@ -161,12 +167,27 @@ func routes(a app) []route {
 		{"GET /v1/balance", authed(handleGetBalance(a.balances))},
 		{"GET /v1/balance_transactions", authed(handleListBalanceTransactions(a.balances))},
 		{"GET /v1/balance_transactions/{id}", authed(handleGetBalanceTransaction(a.balances))},
+		{"POST /v1/checkout/sessions", authedPost(handleCreateCheckoutSession(a.checkout, a.publicURL))},
+		{"GET /v1/checkout/sessions", authed(handleListCheckoutSessions(a.checkout, a.publicURL))},
+		{"GET /v1/checkout/sessions/{id}", authed(handleGetCheckoutSession(a.checkout, a.publicURL))},
+		{"GET /v1/checkout/sessions/{id}/line_items", authed(handleListCheckoutLineItems(a.checkout))},
+		{"POST /v1/checkout/sessions/{id}/expire", authedPost(handleExpireCheckoutSession(a.checkout, a.publicURL))},
+	}
+}
+
+// pageRoutes are the HTML pages people open in a browser. They are not part of the API, so they are
+// not in openapi.yaml and take no API key.
+func pageRoutes(a app) []route {
+	return []route{
+		{"GET /static/", handleStatic()},
+		{"GET /c/pay/{id}", withPageHeaders(handleCheckoutPage(a.checkout))},
+		{"POST /c/pay/{id}", withPageHeaders(handleCheckoutPay(a.checkout))},
 	}
 }
 
 func newRouter(a app) http.Handler {
 	mux := http.NewServeMux()
-	for _, rt := range routes(a) {
+	for _, rt := range append(routes(a), pageRoutes(a)...) {
 		mux.Handle(rt.pattern, rt.handler)
 	}
 	return mux

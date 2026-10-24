@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# End-to-end smoke test against a running API: every Phase 1 and 2 feature, through real HTTP.
+# End-to-end smoke test against a running API: every Phase 1 and 2 feature and hosted checkout, through real HTTP.
 #
 # Usage: SK=sk_test_... [BASE_URL=http://localhost:8080] scripts/smoke.sh
 # Needs curl and jq. Creates real test-mode objects on the server it points at.
@@ -100,6 +100,19 @@ api POST /v1/payment_intents -H "Stripe-Version: 2026-10-01" -d amount=2000 -d c
 expect 200 '.capture_method == "automatic"' "an old version gets the old default"
 api POST /v1/payment_intents -d amount=2000 -d currency=usd
 expect 200 '.capture_method == "automatic_async"' "the latest version gets the new default"
+
+echo "Hosted checkout"
+api POST /v1/checkout/sessions -d mode=payment -d "success_url=https://shop.example/thanks?cs={CHECKOUT_SESSION_ID}" \
+  -d "line_items[0][price_data][currency]=usd" -d "line_items[0][price_data][unit_amount]=1500" \
+  -d "line_items[0][price_data][product_data][name]=T-shirt" -d "line_items[0][quantity]=2"
+expect 200 '.status == "open" and .amount_total == 3000 and (.url | contains("/c/pay/cs_test_"))' "create a checkout session"; CS=$(field .id)
+PAGE=$(curl -sS -o /dev/null -w '%{http_code}' "$BASE_URL/c/pay/$CS")
+[[ $PAGE == 200 ]] && pass "payment page loads" || { BODY=$PAGE; fail "payment page"; }
+LOCATION=$(curl -sS -o /dev/null -w '%{redirect_url}' "$BASE_URL/c/pay/$CS" \
+  -d email=buyer@example.com -d number="4242 4242 4242 4242" -d exp="12 / 34" -d cvc=123)
+[[ $LOCATION == "https://shop.example/thanks?cs=$CS" ]] && pass "pay on the page, redirected to success_url" || { BODY=$LOCATION; fail "checkout redirect"; }
+api GET "/v1/checkout/sessions/$CS"
+expect 200 '.status == "complete" and .payment_status == "paid" and .customer_details.email == "buyer@example.com"' "session is complete and paid"
 
 echo "Customers, again"
 api DELETE "/v1/customers/$CUS"

@@ -90,17 +90,37 @@ with different parameters is rejected.
 In test mode, pass one of these as `payment_method`. The built-in fake card network decides the outcome
 from the card behind it.
 
-| payment_method | Outcome |
-|---|---|
-| `pm_card_visa`, `pm_card_mastercard` | Approved |
-| `pm_card_chargeDeclined` | Declined, `generic_decline` |
-| `pm_card_chargeDeclinedInsufficientFunds` | Declined, `insufficient_funds` |
-| `pm_card_chargeDeclinedLostCard` | Declined, `lost_card` |
-| `pm_card_chargeDeclinedExpiredCard` | Declined, `expired_card` |
-| `pm_card_chargeDeclinedIncorrectCvc` | Declined, `incorrect_cvc` |
-| `pm_card_chargeDeclinedProcessingError` | Declined, `processing_error` |
-| `pm_card_timeout` | The network approves but its answer never arrives (outcome unknown) |
-| `pm_card_refundFail` | Charges normally; every refund is refused by the issuer |
+| payment_method | Card number (checkout page) | Outcome |
+|---|---|---|
+| `pm_card_visa`, `pm_card_mastercard` | `4242 4242 4242 4242`, `5555 5555 5555 4444` | Approved |
+| `pm_card_chargeDeclined` | `4000 0000 0000 0002` | Declined, `generic_decline` |
+| `pm_card_chargeDeclinedInsufficientFunds` | `4000 0000 0000 9995` | Declined, `insufficient_funds` |
+| `pm_card_chargeDeclinedLostCard` | `4000 0000 0000 9987` | Declined, `lost_card` |
+| `pm_card_chargeDeclinedExpiredCard` | `4000 0000 0000 0069` | Declined, `expired_card` |
+| `pm_card_chargeDeclinedIncorrectCvc` | `4000 0000 0000 0127` | Declined, `incorrect_cvc` |
+| `pm_card_chargeDeclinedProcessingError` | `4000 0000 0000 0119` | Declined, `processing_error` |
+| `pm_card_timeout` | `4000 0000 0000 9003` | The network approves but its answer never arrives (outcome unknown) |
+| `pm_card_refundFail` | `4000 0000 0000 5126` | Charges normally; every refund is refused by the issuer |
+
+## Hosted checkout
+
+Let a page on this server collect the card: create a Checkout Session and send the buyer to its `url`.
+After paying they land on `success_url`, with `{CHECKOUT_SESSION_ID}` filled in.
+
+```sh
+curl localhost:8080/v1/checkout/sessions -H "Authorization: Bearer sk_test_..." \
+  -d mode=payment -d "success_url=https://shop.example/thanks?session={CHECKOUT_SESSION_ID}" \
+  -d cancel_url=https://shop.example/cart \
+  -d "line_items[0][price_data][currency]=usd" -d "line_items[0][price_data][unit_amount]=1500" \
+  -d "line_items[0][price_data][product_data][name]=T-shirt" -d "line_items[0][quantity]=2"
+# {"id": "cs_test_...", "url": "http://localhost:8080/c/pay/cs_test_...", "status": "open", ...}
+curl localhost:8080/v1/checkout/sessions/cs_test_... -H "Authorization: Bearer sk_test_..."   # status: complete once paid
+curl -X POST localhost:8080/v1/checkout/sessions/cs_test_.../expire -H "Authorization: Bearer sk_test_..."
+```
+
+Open the `url` in a browser and pay with a test card number from the table below (any future expiry,
+any CVC). Links use `PUBLIC_URL` (default `http://localhost:$PORT`); set it to the address browsers
+reach the server on. A session expires after 24 hours (`expires_at` can shorten that).
 
 ## API versions
 
@@ -137,8 +157,8 @@ and refunds keep the ledger balanced; `GATE_SEED` and `GATE_OPS` replay or scale
 ### Smoke test a running server
 
 `scripts/smoke.sh` walks every feature over real HTTP with `curl` and `jq`: charges, declines,
-idempotent retries, auth and capture, cancel, timeouts, pagination, refunds, balance, API versions
-and customers. It creates its own data, so it can run again on the same database.
+idempotent retries, auth and capture, cancel, timeouts, pagination, refunds, balance, API versions,
+customers and paying a hosted checkout page. It creates its own data, so it can run again on the same database.
 
 ```sh
 go run ./cmd/admin create-merchant -name Smoke -email smoke@test.local

@@ -21,12 +21,12 @@ const (
 	CardExpired             = "4000000000000069"
 	CardIncorrectCVC        = "4000000000000127"
 	CardProcessingError     = "4000000000000119"
-	CardTimeoutAfterApprove = "4000000000009001" // approved by the network, but the answer never arrives
+	CardTimeoutAfterApprove = "4000000000009003" // approved by the network, but the answer never arrives
 	CardRefundFails         = "4000000000005126" // charges fine; every refund is refused (Stripe's refund_fail card)
 )
 
 // testPaymentMethods are the payment method IDs merchants pass in test mode, named as Stripe's.
-// Hosted checkout will later create real pm_ IDs; these keep the API usable from curl until then.
+// The hosted checkout page maps a typed test card number to one of these IDs.
 var testPaymentMethods = map[string]Card{
 	"pm_card_visa":                            {Number: CardVisa, Brand: "visa"},
 	"pm_card_mastercard":                      {Number: CardMastercard, Brand: "mastercard"},
@@ -38,6 +38,17 @@ var testPaymentMethods = map[string]Card{
 	"pm_card_chargeDeclinedProcessingError":   {Number: CardProcessingError, Brand: "visa"},
 	"pm_card_timeout":                         {Number: CardTimeoutAfterApprove, Brand: "visa"},
 	"pm_card_refundFail":                      {Number: CardRefundFails, Brand: "visa"},
+}
+
+// TestPaymentMethodForNumber returns the test payment method ID for a test card number, so a card
+// typed on the hosted checkout page becomes the same ID a merchant would pass from curl.
+func TestPaymentMethodForNumber(number string) (string, bool) {
+	for id, c := range testPaymentMethods {
+		if c.Number == number {
+			return id, true
+		}
+	}
+	return "", false
 }
 
 // TestPaymentMethod returns the card behind a test payment method ID.
