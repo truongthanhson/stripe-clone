@@ -539,6 +539,136 @@ paths:
               schema: { $ref: "#/components/schemas/CheckoutSession" }
         default: { $ref: "#/components/responses/Error" }
 
+  /v1/events:
+    get:
+      operationId: ListEvents
+      summary: List events, newest first (the order they happened in, reversed)
+      parameters:
+        - $ref: "#/components/parameters/Limit"
+        - $ref: "#/components/parameters/StartingAfter"
+        - $ref: "#/components/parameters/EndingBefore"
+        - name: type
+          in: query
+          description: Only events of this type, or of a group such as payment_intent.*.
+          schema: { type: string }
+      responses:
+        "200":
+          description: A page of events.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/EventList" }
+        default: { $ref: "#/components/responses/Error" }
+
+  /v1/events/{id}:
+    parameters:
+      - name: id
+        in: path
+        required: true
+        schema: { type: string }
+    get:
+      operationId: GetEvent
+      summary: Retrieve an event
+      responses:
+        "200":
+          description: The event.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/Event" }
+        default: { $ref: "#/components/responses/Error" }
+
+  /v1/webhook_endpoints:
+    get:
+      operationId: ListWebhookEndpoints
+      summary: List webhook endpoints, newest first
+      parameters:
+        - $ref: "#/components/parameters/Limit"
+        - $ref: "#/components/parameters/StartingAfter"
+        - $ref: "#/components/parameters/EndingBefore"
+      responses:
+        "200":
+          description: A page of webhook endpoints.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/WebhookEndpointList" }
+        default: { $ref: "#/components/responses/Error" }
+    post:
+      operationId: CreateWebhookEndpoint
+      summary: Register a URL to receive events; the response holds its signing secret, shown only here
+      description: |
+        Every event of a subscribed type is POSTed to url as JSON, with a Stripe-Signature header
+        "t=<unix>,v1=<hex HMAC-SHA256 of '<t>.<body>' keyed with the secret>". Delivery is at least once:
+        anything but a 2xx answer is retried with backoff for up to 3 days, and events reach an endpoint
+        in the order they happened. Deduplicate on the event id. Live mode endpoints must use https.
+      parameters:
+        - $ref: "#/components/parameters/IdempotencyKey"
+      requestBody:
+        required: true
+        content:
+          application/x-www-form-urlencoded:
+            schema:
+              type: object
+              required: [url]
+              properties:
+                url: { type: string, maxLength: 2048 }
+                enabled_events: { $ref: "#/components/schemas/EnabledEventsParam" }
+                description: { type: string, maxLength: 5000 }
+      responses:
+        "200":
+          description: The new endpoint, with its secret.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/WebhookEndpoint" }
+        default: { $ref: "#/components/responses/Error" }
+
+  /v1/webhook_endpoints/{id}:
+    parameters:
+      - name: id
+        in: path
+        required: true
+        schema: { type: string }
+    get:
+      operationId: GetWebhookEndpoint
+      summary: Retrieve a webhook endpoint
+      responses:
+        "200":
+          description: The endpoint.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/WebhookEndpoint" }
+        default: { $ref: "#/components/responses/Error" }
+    post:
+      operationId: UpdateWebhookEndpoint
+      summary: Change a webhook endpoint's URL, events or description, or disable it
+      parameters:
+        - $ref: "#/components/parameters/IdempotencyKey"
+      requestBody:
+        content:
+          application/x-www-form-urlencoded:
+            schema:
+              type: object
+              properties:
+                url: { type: string, maxLength: 2048 }
+                enabled_events: { $ref: "#/components/schemas/EnabledEventsParam" }
+                description: { type: string, maxLength: 5000 }
+                disabled: { type: boolean, description: A disabled endpoint receives nothing until enabled again. }
+      responses:
+        "200":
+          description: The updated endpoint.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/WebhookEndpoint" }
+        default: { $ref: "#/components/responses/Error" }
+    delete:
+      operationId: DeleteWebhookEndpoint
+      summary: Delete a webhook endpoint; deliveries still queued for it are dropped
+      responses:
+        "200":
+          description: The deletion marker.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/DeletedWebhookEndpoint" }
+        default: { $ref: "#/components/responses/Error" }
+
 components:
   securitySchemes:
     bearerAuth:
@@ -898,3 +1028,83 @@ components:
         data:
           type: array
           items: { $ref: "#/components/schemas/LineItem" }
+
+    EventType:
+      type: string
+      enum: [checkout.session.completed, checkout.session.expired, payment_intent.amount_capturable_updated, payment_intent.canceled, payment_intent.created, payment_intent.payment_failed, payment_intent.processing, payment_intent.succeeded, refund.created, refund.failed, refund.updated]
+
+    EnabledEventsParam:
+      type: array
+      description: Event types to send, as enabled_events[]=payment_intent.succeeded; "*" means all.
+      items:
+        type: string
+        enum: ["*", checkout.session.completed, checkout.session.expired, payment_intent.amount_capturable_updated, payment_intent.canceled, payment_intent.created, payment_intent.payment_failed, payment_intent.processing, payment_intent.succeeded, refund.created, refund.failed, refund.updated]
+
+    Event:
+      type: object
+      additionalProperties: false
+      required: [id, object, api_version, created, data, livemode, pending_webhooks, type]
+      properties:
+        id: { type: string, pattern: "^evt_" }
+        object: { type: string, enum: [event] }
+        api_version: { type: string, description: The API version data.object is rendered in. }
+        created: { type: integer }
+        data:
+          type: object
+          additionalProperties: false
+          required: [object]
+          properties:
+            object: { type: object, description: "The object as it was right after the change: a PaymentIntent, Refund or Checkout Session." }
+        livemode: { type: boolean }
+        pending_webhooks: { type: integer, minimum: 0, description: Deliveries of this event not yet acknowledged. }
+        type: { $ref: "#/components/schemas/EventType" }
+
+    EventList:
+      type: object
+      additionalProperties: false
+      required: [object, url, has_more, data]
+      properties:
+        object: { type: string, enum: [list] }
+        url: { type: string }
+        has_more: { type: boolean }
+        data:
+          type: array
+          items: { $ref: "#/components/schemas/Event" }
+
+    WebhookEndpoint:
+      type: object
+      additionalProperties: false
+      required: [id, object, created, description, enabled_events, livemode, status, url]
+      properties:
+        id: { type: string, pattern: "^we_" }
+        object: { type: string, enum: [webhook_endpoint] }
+        created: { type: integer }
+        description: { type: string, nullable: true }
+        enabled_events:
+          type: array
+          items: { type: string }
+        livemode: { type: boolean }
+        secret: { type: string, pattern: "^whsec_", description: Only in the response that created the endpoint. }
+        status: { type: string, enum: [enabled, disabled] }
+        url: { type: string }
+
+    WebhookEndpointList:
+      type: object
+      additionalProperties: false
+      required: [object, url, has_more, data]
+      properties:
+        object: { type: string, enum: [list] }
+        url: { type: string }
+        has_more: { type: boolean }
+        data:
+          type: array
+          items: { $ref: "#/components/schemas/WebhookEndpoint" }
+
+    DeletedWebhookEndpoint:
+      type: object
+      additionalProperties: false
+      required: [id, object, deleted]
+      properties:
+        id: { type: string }
+        object: { type: string, enum: [webhook_endpoint] }
+        deleted: { type: boolean, enum: [true] }

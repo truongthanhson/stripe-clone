@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# End-to-end smoke test against a running API: every Phase 1 and 2 feature and hosted checkout, through real HTTP.
+# End-to-end smoke test against a running API: every Phase 1 and 2 feature, hosted checkout and events, through real HTTP.
 #
 # Usage: SK=sk_test_... [BASE_URL=http://localhost:8080] scripts/smoke.sh
 # Needs curl and jq. Creates real test-mode objects on the server it points at.
@@ -113,6 +113,18 @@ LOCATION=$(curl -sS -o /dev/null -w '%{redirect_url}' "$BASE_URL/c/pay/$CS" \
 [[ $LOCATION == "https://shop.example/thanks?cs=$CS" ]] && pass "pay on the page, redirected to success_url" || { BODY=$LOCATION; fail "checkout redirect"; }
 api GET "/v1/checkout/sessions/$CS"
 expect 200 '.status == "complete" and .payment_status == "paid" and .customer_details.email == "buyer@example.com"' "session is complete and paid"
+
+echo "Events and webhooks"
+api GET "/v1/events?type=payment_intent.succeeded&limit=100"
+expect 200 "[.data[] | select(.data.object.id == \"$PI\")] | length == 1" "the charge was recorded as a payment_intent.succeeded event"
+api GET "/v1/events?type=checkout.session.completed&limit=1"
+expect 200 ".data[0].data.object.id == \"$CS\"" "the paid checkout session was recorded as completed"
+api POST /v1/webhook_endpoints -d url=https://hooks.example/smoke-$RUN -d "enabled_events[]=payment_intent.succeeded"
+expect 200 '(.id | startswith("we_")) and (.secret | startswith("whsec_"))' "register a webhook endpoint (secret shown once)"; WE=$(field .id)
+api GET "/v1/webhook_endpoints/$WE"
+expect 200 '.secret == null and .status == "enabled"' "the secret is not shown again"
+api DELETE "/v1/webhook_endpoints/$WE"
+expect 200 '.deleted == true' "delete the webhook endpoint"
 
 echo "Customers, again"
 api DELETE "/v1/customers/$CUS"

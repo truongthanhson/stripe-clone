@@ -65,6 +65,25 @@ type Service struct {
 	network cardnetwork.Network
 	timeout time.Duration
 	logger  *slog.Logger
+	hooks   []Hook
+}
+
+// Hook runs inside the transaction that creates a refund or settles it (succeeded or failed), after
+// its ledger posting. An error rolls the change back.
+type Hook func(ctx context.Context, tx pgx.Tx, re Refund) error
+
+// OnChange registers a hook. Register hooks before serving requests; the list is not locked.
+func (s *Service) OnChange(h Hook) {
+	s.hooks = append(s.hooks, h)
+}
+
+func (s *Service) changed(ctx context.Context, tx pgx.Tx, re Refund) error {
+	for _, h := range s.hooks {
+		if err := h(ctx, tx, re); err != nil {
+			return err
+		}
+	}
+	return nil
 }
 
 func NewService(pool *pgxpool.Pool, network cardnetwork.Network, timeout time.Duration, logger *slog.Logger) *Service {
@@ -147,7 +166,10 @@ func (s *Service) Create(ctx context.Context, merchantID int64, livemode bool, p
 			INSERT INTO refunds (id, merchant_id, livemode, payment_intent_id, amount, currency, status, reason, metadata)
 			VALUES ($1, $2, $3, $4, $5, $6, 'pending', $7, $8) RETURNING `+columns,
 			"re_"+rand.Text(), merchantID, livemode, p.PaymentIntentID, amount, currency, p.Reason, md))
-		return err
+		if err != nil {
+			return err
+		}
+		return s.changed(ctx, tx, re)
 	})
 	if err != nil {
 		return Refund{}, err
@@ -178,16 +200,27 @@ func (s *Service) Create(ctx context.Context, merchantID int64, livemode bool, p
 		if err != nil {
 			return err
 		}
-		_, err = ledger.Post(ctx, tx, ledger.Refund(re.ID, re.MerchantID, re.Livemode, re.Currency, re.Amount))
-		return err
+		if _, err = ledger.Post(ctx, tx, ledger.Refund(re.ID, re.MerchantID, re.Livemode, re.Currency, re.Amount)); err != nil {
+			return err
+		}
+		return s.changed(ctx, tx, re)
 	})
 	return re, err
 }
 
 func (s *Service) fail(ctx context.Context, id, reason string) (Refund, error) {
-	return scan(s.pool.QueryRow(ctx, `
-		UPDATE refunds SET status = 'failed', failure_reason = $2, updated_at = now()
-		WHERE id = $1 AND status = 'pending' RETURNING `+columns, id, reason))
+	var re Refund
+	err := pgx.BeginFunc(ctx, s.pool, func(tx pgx.Tx) error {
+		var err error
+		re, err = scan(tx.QueryRow(ctx, `
+			UPDATE refunds SET status = 'failed', failure_reason = $2, updated_at = now()
+			WHERE id = $1 AND status = 'pending' RETURNING `+columns, id, reason))
+		if err != nil {
+			return err
+		}
+		return s.changed(ctx, tx, re)
+	})
+	return re, err
 }
 
 func (s *Service) Get(ctx context.Context, merchantID int64, livemode bool, id string) (Refund, error) {

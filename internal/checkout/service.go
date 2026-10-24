@@ -22,6 +22,16 @@ type Service struct {
 	pool    *pgxpool.Pool
 	intents *paymentintent.Service
 	now     func() time.Time
+	hooks   []Hook
+}
+
+// Hook runs inside the transaction that completes or expires a session, exactly once per session.
+// An error rolls the change back.
+type Hook func(ctx context.Context, tx pgx.Tx, s Session) error
+
+// OnChange registers a hook. Register hooks before serving requests; the list is not locked.
+func (s *Service) OnChange(h Hook) {
+	s.hooks = append(s.hooks, h)
 }
 
 func NewService(pool *pgxpool.Pool, intents *paymentintent.Service) *Service {
@@ -66,7 +76,7 @@ func (s *Service) Create(ctx context.Context, merchantID int64, livemode bool, p
 
 	var id string
 	err = pgx.BeginFunc(ctx, s.pool, func(tx pgx.Tx) error {
-		pi, err := paymentintent.CreateIn(ctx, tx, merchantID, livemode, paymentintent.CreateParams{
+		pi, err := s.intents.CreateIn(ctx, tx, merchantID, livemode, paymentintent.CreateParams{
 			Amount:        p.amountTotal(),
 			Currency:      currency,
 			CaptureMethod: paymentintent.CaptureAutomatic,
@@ -237,20 +247,12 @@ func (s *Service) refresh(ctx context.Context, sess Session) (Session, error) {
 			return Session{}, err
 		}
 	}
-	var to Status
-	switch sess.Intent.Status {
-	case paymentintent.StatusSucceeded:
-		to = StatusComplete
-	case paymentintent.StatusCanceled:
-		to = StatusExpired
-	default:
+	if !settles(sess.Intent.Status) {
 		return sess, nil
 	}
-	// WHERE status = 'open' makes concurrent refreshes harmless: one writes, the others match nothing,
-	// and every caller re-reads the same result.
-	if _, err := s.pool.Exec(ctx, `UPDATE checkout_sessions
-		SET status = $2::text, completed_at = CASE WHEN $2::text = 'complete' THEN now() END, updated_at = now()
-		WHERE id = $1 AND status = 'open'`, sess.ID, string(to)); err != nil {
+	// IntentChanged normally settled the session already; this catches sessions whose payment ended
+	// before that hook was registered.
+	if err := pgx.BeginFunc(ctx, s.pool, func(tx pgx.Tx) error { return s.settle(ctx, tx, sess.Intent) }); err != nil {
 		return Session{}, err
 	}
 	fresh, err := scan(s.pool.QueryRow(ctx, `SELECT `+columns+from+` WHERE s.id = $1`, sess.ID))
@@ -259,4 +261,48 @@ func (s *Service) refresh(ctx context.Context, sess Session) (Session, error) {
 	}
 	fresh.Intent = sess.Intent
 	return fresh, nil
+}
+
+func settles(st paymentintent.Status) bool {
+	return st == paymentintent.StatusSucceeded || st == paymentintent.StatusCanceled
+}
+
+// IntentChanged is a paymentintent.Hook: when a session's PaymentIntent succeeds or is canceled, the
+// session completes or expires in the same transaction.
+func (s *Service) IntentChanged(ctx context.Context, tx pgx.Tx, pi paymentintent.PaymentIntent, _ paymentintent.Status) error {
+	if !settles(pi.Status) {
+		return nil
+	}
+	return s.settle(ctx, tx, pi)
+}
+
+// settle completes or expires the open session of a finished PaymentIntent. WHERE status = 'open'
+// makes it happen once: concurrent callers match nothing, and only the one that changed the row
+// runs the hooks.
+func (s *Service) settle(ctx context.Context, tx pgx.Tx, pi paymentintent.PaymentIntent) error {
+	to := StatusExpired
+	if pi.Status == paymentintent.StatusSucceeded {
+		to = StatusComplete
+	}
+	var id string
+	err := tx.QueryRow(ctx, `UPDATE checkout_sessions
+		SET status = $2::text, completed_at = CASE WHEN $2::text = 'complete' THEN now() END, updated_at = now()
+		WHERE payment_intent_id = $1 AND status = 'open' RETURNING id`, pi.ID, string(to)).Scan(&id)
+	if errors.Is(err, pgx.ErrNoRows) {
+		return nil
+	}
+	if err != nil {
+		return err
+	}
+	sess, err := scan(tx.QueryRow(ctx, `SELECT `+columns+from+` WHERE s.id = $1`, id))
+	if err != nil {
+		return err
+	}
+	sess.Intent = pi
+	for _, h := range s.hooks {
+		if err := h(ctx, tx, sess); err != nil {
+			return err
+		}
+	}
+	return nil
 }

@@ -20,7 +20,27 @@ var (
 )
 
 type Store struct {
-	pool *pgxpool.Pool
+	pool  *pgxpool.Pool
+	hooks []Hook
+}
+
+// Hook runs inside the transaction that creates a PaymentIntent (from is "") or changes its status,
+// after the change and its ledger posting. Whatever it writes commits with the change; an error
+// rolls the change back.
+type Hook func(ctx context.Context, tx pgx.Tx, pi PaymentIntent, from Status) error
+
+// OnChange registers a hook. Register hooks before serving requests; the list is not locked.
+func (s *Store) OnChange(h Hook) {
+	s.hooks = append(s.hooks, h)
+}
+
+func (s *Store) changed(ctx context.Context, tx pgx.Tx, pi PaymentIntent, from Status) error {
+	for _, h := range s.hooks {
+		if err := h(ctx, tx, pi, from); err != nil {
+			return err
+		}
+	}
+	return nil
 }
 
 func NewStore(pool *pgxpool.Pool) *Store {
@@ -44,12 +64,26 @@ func scan(row pgx.Row) (PaymentIntent, error) {
 
 // Create validates p and stores a new PaymentIntent owned by the merchant in the given mode.
 func (s *Store) Create(ctx context.Context, merchantID int64, livemode bool, p CreateParams) (PaymentIntent, error) {
-	return CreateIn(ctx, s.pool, merchantID, livemode, p)
+	var pi PaymentIntent
+	err := pgx.BeginFunc(ctx, s.pool, func(tx pgx.Tx) error {
+		var err error
+		pi, err = s.CreateIn(ctx, tx, merchantID, livemode, p)
+		return err
+	})
+	return pi, err
 }
 
 // CreateIn is Create inside the caller's transaction, for objects that own a PaymentIntent and must
 // be stored together with it.
-func CreateIn(ctx context.Context, q querier, merchantID int64, livemode bool, p CreateParams) (PaymentIntent, error) {
+func (s *Store) CreateIn(ctx context.Context, tx pgx.Tx, merchantID int64, livemode bool, p CreateParams) (PaymentIntent, error) {
+	pi, err := insert(ctx, tx, merchantID, livemode, p)
+	if err != nil {
+		return PaymentIntent{}, err
+	}
+	return pi, s.changed(ctx, tx, pi, "")
+}
+
+func insert(ctx context.Context, q querier, merchantID int64, livemode bool, p CreateParams) (PaymentIntent, error) {
 	if err := p.Validate(); err != nil {
 		return PaymentIntent{}, err
 	}
@@ -153,7 +187,16 @@ type querier interface {
 }
 
 func (s *Store) transition(ctx context.Context, id string, from, to Status, set string, args ...any) (PaymentIntent, error) {
-	return transitionWith(ctx, s.pool, id, from, to, set, args...)
+	var pi PaymentIntent
+	err := pgx.BeginFunc(ctx, s.pool, func(tx pgx.Tx) error {
+		var err error
+		pi, err = transitionWith(ctx, tx, id, from, to, set, args...)
+		if err != nil {
+			return err
+		}
+		return s.changed(ctx, tx, pi, from)
+	})
+	return pi, err
 }
 
 // succeed moves a PaymentIntent to succeeded and posts the charge to the ledger in one database
@@ -166,8 +209,10 @@ func (s *Store) succeed(ctx context.Context, id string, from Status, set string,
 		if err != nil {
 			return err
 		}
-		_, err = ledger.Post(ctx, tx, ledger.Charge(pi.ID, pi.MerchantID, pi.Livemode, pi.Currency, pi.AmountReceived))
-		return err
+		if _, err = ledger.Post(ctx, tx, ledger.Charge(pi.ID, pi.MerchantID, pi.Livemode, pi.Currency, pi.AmountReceived)); err != nil {
+			return err
+		}
+		return s.changed(ctx, tx, pi, from)
 	})
 	return pi, err
 }

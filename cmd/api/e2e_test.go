@@ -15,13 +15,7 @@ import (
 
 	"github.com/truongthanhson/stripe-clone/internal/apikey"
 	"github.com/truongthanhson/stripe-clone/internal/cardnetwork"
-	"github.com/truongthanhson/stripe-clone/internal/checkout"
-	"github.com/truongthanhson/stripe-clone/internal/customer"
-	"github.com/truongthanhson/stripe-clone/internal/dashboard"
-	"github.com/truongthanhson/stripe-clone/internal/idempotency"
 	"github.com/truongthanhson/stripe-clone/internal/ledger"
-	"github.com/truongthanhson/stripe-clone/internal/paymentintent"
-	"github.com/truongthanhson/stripe-clone/internal/refund"
 	"github.com/truongthanhson/stripe-clone/internal/testdb"
 )
 
@@ -62,23 +56,11 @@ func newE2EAtVersion(t *testing.T, version string) e2e {
 
 	logger := slog.New(slog.NewJSONHandler(io.Discard, nil))
 	network := cardnetwork.NewFake()
-	intents := paymentintent.NewService(paymentintent.NewStore(pool), network, 200*time.Millisecond, logger)
+	a := buildApp(pool, network, 200*time.Millisecond, logger, "https://pay.example.test")
 	return e2e{
-		network: network,
-		pool:    pool,
-		handler: withVersionHeader(version, withContractCheck(t, withRequestLogging(logger, newRouter(app{
-			db:        pool,
-			keys:      keys,
-			intents:   intents,
-			refunds:   refund.NewService(pool, network, 200*time.Millisecond, logger),
-			customers: customer.NewStore(pool),
-			balances:  ledger.NewReader(pool),
-			idem:      idempotency.NewStore(pool),
-			checkout:  checkout.NewService(pool, intents),
-			dashboard: dashboard.NewStore(pool),
-			keyAdmin:  keys,
-			publicURL: "https://pay.example.test",
-		})))),
+		network:          network,
+		pool:             pool,
+		handler:          withVersionHeader(version, withContractCheck(t, withRequestLogging(logger, newRouter(a)))),
 		testKey:          issue(acme, apikey.ModeTest),
 		liveKey:          issue(acme, apikey.ModeLive),
 		otherMerchantKey: issue(globex, apikey.ModeTest),
