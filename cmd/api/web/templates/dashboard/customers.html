@@ -1,0 +1,21 @@
+{{define "content" -}}
+<h1>Customers</h1>
+<table class="list">
+  <thead><tr><th>Name</th><th>Email</th><th>ID</th><th class="num">Created</th></tr></thead>
+  <tbody id="rows">
+  {{- range .Data.Items}}
+    <tr>
+      <td><a href="/dashboard/customers/{{.ID}}">{{with .Name}}{{.}}{{else}}<span class="muted">No name</span>{{end}}</a></td>
+      <td>{{with .Email}}{{.}}{{end}}</td>
+      <td class="mono muted">{{.ID}}</td>
+      <td class="num muted">{{date .Created}}</td>
+    </tr>
+  {{- else}}
+    <tr><td colspan="4" class="muted">No customers yet.</td></tr>
+  {{- end}}
+  {{- with .Data.Next}}
+    <tr id="more"><td colspan="4"><a href="?starting_after={{.}}" hx-get="?starting_after={{.}}" hx-select="#rows > tr" hx-target="#more" hx-swap="outerHTML" hx-push-url="false">Load more</a></td></tr>
+  {{- end}}
+  </tbody>
+</table>
+{{- end}}

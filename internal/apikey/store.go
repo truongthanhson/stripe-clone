@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"time"
 
 	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgxpool"
@@ -84,4 +85,37 @@ func (s *Store) Lookup(ctx context.Context, secret string) (Principal, error) {
 	}
 	p.Mode = Mode(mode)
 	return p, nil
+}
+
+// Info describes a key without its secret, for listing.
+type Info struct {
+	ID        int64
+	Mode      Mode
+	Prefix    string
+	Created   time.Time
+	RevokedAt *time.Time
+}
+
+// List returns the merchant's keys in one mode, newest first, revoked ones included.
+func (s *Store) List(ctx context.Context, merchantID int64, mode Mode) ([]Info, error) {
+	rows, err := s.pool.Query(ctx, `SELECT id, mode, prefix, created_at, revoked_at FROM api_keys
+		WHERE merchant_id = $1 AND mode = $2 ORDER BY created_at DESC, id DESC`, merchantID, string(mode))
+	if err != nil {
+		return nil, err
+	}
+	return pgx.CollectRows(rows, func(row pgx.CollectableRow) (Info, error) {
+		var k Info
+		err := row.Scan(&k.ID, &k.Mode, &k.Prefix, &k.Created, &k.RevokedAt)
+		return k, err
+	})
+}
+
+// Revoke stops a key from authenticating, immediately and for good.
+func (s *Store) Revoke(ctx context.Context, merchantID, keyID int64) error {
+	tag, err := s.pool.Exec(ctx, `UPDATE api_keys SET revoked_at = now()
+		WHERE id = $1 AND merchant_id = $2 AND revoked_at IS NULL`, keyID, merchantID)
+	if err == nil && tag.RowsAffected() == 0 {
+		return ErrNotFound
+	}
+	return err
 }

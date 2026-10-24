@@ -1,0 +1,86 @@
+{{define "layout" -}}
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<meta name="htmx-config" content='{"includeIndicatorStyles":false,"historyCacheSize":0,"refreshOnHistoryMiss":true,"responseHandling":[{"code":"204","swap":false},{"code":"...","swap":true}]}'>
+<title>{{.Title}} · Dashboard</title>
+<link rel="stylesheet" href="/static/dashboard.css">
+<script src="/static/htmx.min.js" defer></script>
+</head>
+<body hx-boost="true">
+{{- with .Session}}
+{{- if not .Livemode}}
+<div class="testmode">Test mode: you are viewing test data</div>
+{{- end}}
+<header class="top">
+  <span class="brand">{{.MerchantName}}</span>
+  <nav>
+    <a href="/dashboard/"{{if eq $.Nav "home"}} class="active"{{end}}>Home</a>
+    <a href="/dashboard/payments"{{if eq $.Nav "payments"}} class="active"{{end}}>Payments</a>
+    <a href="/dashboard/customers"{{if eq $.Nav "customers"}} class="active"{{end}}>Customers</a>
+    <a href="/dashboard/balance"{{if eq $.Nav "balance"}} class="active"{{end}}>Balance</a>
+    <a href="/dashboard/apikeys"{{if eq $.Nav "apikeys"}} class="active"{{end}}>API keys</a>
+  </nav>
+  <div class="account">
+    <form method="post" action="/dashboard/mode">
+      <input type="hidden" name="csrf_token" value="{{.CSRFToken}}">
+      <input type="hidden" name="livemode" value="{{if .Livemode}}false{{else}}true{{end}}">
+      <button class="link">{{if .Livemode}}Switch to test data{{else}}Switch to live data{{end}}</button>
+    </form>
+    <form method="post" action="/dashboard/logout">
+      <input type="hidden" name="csrf_token" value="{{.CSRFToken}}">
+      <button class="link">Sign out</button>
+    </form>
+  </div>
+</header>
+{{- end}}
+<main class="{{if .Session}}page{{else}}narrow{{end}}">
+  {{- with .Flash}}
+  <p class="flash" role="status">{{.}}</p>
+  {{- end}}
+  {{- with .Error}}
+  <p class="alert" role="alert">{{.}}</p>
+  {{- end}}
+  {{- template "content" .}}
+</main>
+</body>
+</html>
+{{- end}}
+
+{{define "payment_table" -}}
+<table class="list">
+  <thead><tr><th class="num">Amount</th><th>Status</th><th>Description</th><th>Customer</th><th class="num">Date</th></tr></thead>
+  <tbody id="rows">
+  {{- range .Items}}
+    <tr>
+      <td class="num"><a href="/dashboard/payments/{{.ID}}">{{money .Amount .Currency}}</a></td>
+      <td><span class="badge {{badge .Status}}">{{.Status}}</span></td>
+      <td>{{if .Description}}{{.Description}}{{else}}<span class="mono muted">{{.ID}}</span>{{end}}</td>
+      <td>{{with .Customer}}<a class="mono" href="/dashboard/customers/{{.}}">{{.}}</a>{{end}}</td>
+      <td class="num muted">{{date .Created}}</td>
+    </tr>
+  {{- else}}
+    <tr><td colspan="5" class="muted">No payments yet.</td></tr>
+  {{- end}}
+  {{- with .Next}}
+    <tr id="more"><td colspan="5"><a href="?starting_after={{.}}" hx-get="?starting_after={{.}}" hx-select="#rows > tr" hx-target="#more" hx-swap="outerHTML" hx-push-url="false">Load more</a></td></tr>
+  {{- end}}
+  </tbody>
+</table>
+{{- end}}
+
+{{define "balance_cards" -}}
+<div class="cards">
+  {{- range .}}
+  <div class="card">
+    <p class="label">{{.Currency}} pending</p>
+    <p class="big">{{money .Pending .Currency}}</p>
+    <p class="muted">Available {{money .Available .Currency}}</p>
+  </div>
+  {{- else}}
+  <p class="muted">No money has moved yet.</p>
+  {{- end}}
+</div>
+{{- end}}

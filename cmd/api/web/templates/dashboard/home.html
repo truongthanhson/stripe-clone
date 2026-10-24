@@ -1,0 +1,6 @@
+{{define "content" -}}
+<h1>Home</h1>
+{{template "balance_cards" .Data.Balances}}
+<h2>Recent payments <a class="small" href="/dashboard/payments">View all</a></h2>
+{{template "payment_table" .Data.Payments}}
+{{- end}}

@@ -1,0 +1,95 @@
+{{define "content" -}}
+{{- $d := .Data}}{{$pi := $d.Intent}}{{$csrf := .Session.CSRFToken}}
+<p class="crumb"><a href="/dashboard/payments">Payments</a></p>
+<h1>{{money $pi.Amount $pi.Currency}} <span class="badge {{badge $pi.Status}}">{{$pi.Status}}</span></h1>
+<p class="mono muted">{{$pi.ID}}</p>
+<div class="columns">
+  <section class="panel">
+    <h2>Details</h2>
+    <dl class="kv">
+      <dt>Created</dt><dd>{{date $pi.Created}}</dd>
+      <dt>Description</dt><dd>{{with $pi.Description}}{{.}}{{else}}<span class="muted">None</span>{{end}}</dd>
+      <dt>Customer</dt><dd>{{with $pi.Customer}}<a class="mono" href="/dashboard/customers/{{.}}">{{.}}</a>{{else}}<span class="muted">None</span>{{end}}</dd>
+      <dt>Payment method</dt><dd>{{with $pi.PaymentMethod}}<span class="mono">{{.}}</span>{{else}}<span class="muted">None</span>{{end}}</dd>
+      <dt>Capture</dt><dd>{{$pi.CaptureMethod}}</dd>
+      <dt>Received</dt><dd>{{money $pi.AmountReceived $pi.Currency}}</dd>
+      {{- if $pi.AmountCapturable}}
+      <dt>Capturable</dt><dd>{{money $pi.AmountCapturable $pi.Currency}}</dd>
+      {{- end}}
+      <dt>Refunded</dt><dd>{{money $d.Refunded $pi.Currency}}</dd>
+      {{- with $pi.LastPaymentError}}
+      <dt>Last error</dt><dd>{{.Message}}{{with .DeclineCode}} <span class="mono muted">{{.}}</span>{{end}}</dd>
+      {{- end}}
+      {{- with $pi.CancellationReason}}
+      <dt>Canceled because</dt><dd>{{.}}</dd>
+      {{- end}}
+    </dl>
+    {{- if $pi.Metadata}}
+    <h2>Metadata</h2>
+    <dl class="kv">
+      {{- range $k, $v := $pi.Metadata}}
+      <dt class="mono">{{$k}}</dt><dd>{{$v}}</dd>
+      {{- end}}
+    </dl>
+    {{- end}}
+  </section>
+
+  <section class="panel">
+    <h2>Actions</h2>
+    {{- if eq $pi.Status "requires_capture"}}
+    <form method="post" action="/dashboard/payments/{{$pi.ID}}/capture">
+      <input type="hidden" name="csrf_token" value="{{$csrf}}">
+      <label for="capture-amount">Amount to capture ({{$pi.Currency}})</label>
+      <input id="capture-amount" name="amount" inputmode="decimal" value="{{major $pi.AmountCapturable $pi.Currency}}">
+      <button type="submit" hx-disabled-elt="this">Capture</button>
+    </form>
+    {{- end}}
+    {{- if gt $d.Refundable 0}}
+    <form method="post" action="/dashboard/payments/{{$pi.ID}}/refunds">
+      <input type="hidden" name="csrf_token" value="{{$csrf}}">
+      <input type="hidden" name="refund_token" value="{{$d.RefundToken}}">
+      <label for="refund-amount">Amount to refund ({{$pi.Currency}})</label>
+      <input id="refund-amount" name="amount" inputmode="decimal" value="{{major $d.Refundable $pi.Currency}}">
+      <label for="refund-reason">Reason</label>
+      <select id="refund-reason" name="reason">
+        <option value="">None</option>
+        <option value="requested_by_customer">Requested by customer</option>
+        <option value="duplicate">Duplicate</option>
+        <option value="fraudulent">Fraudulent</option>
+      </select>
+      <button type="submit" hx-disabled-elt="this">Refund</button>
+    </form>
+    {{- end}}
+    {{- if $d.Cancelable}}
+    <form method="post" action="/dashboard/payments/{{$pi.ID}}/cancel" hx-confirm="Cancel this payment? Any money held on the card is released.">
+      <input type="hidden" name="csrf_token" value="{{$csrf}}">
+      <input type="hidden" name="reason" value="requested_by_customer">
+      <button type="submit" class="secondary" hx-disabled-elt="this">Cancel payment</button>
+    </form>
+    {{- end}}
+    {{- if eq $pi.Status "processing"}}
+    <p class="muted">The bank has not answered yet, so the outcome is unknown. Nothing can be done until it settles.</p>
+    {{- else if not (or (eq $pi.Status "requires_capture") (gt $d.Refundable 0) $d.Cancelable)}}
+    <p class="muted">Nothing to do for a payment that is {{$pi.Status}}{{if eq $pi.Status "succeeded"}} and fully refunded{{end}}.</p>
+    {{- end}}
+  </section>
+</div>
+
+<h2>Refunds</h2>
+<table class="list">
+  <thead><tr><th class="num">Amount</th><th>Status</th><th>Reason</th><th>ID</th><th class="num">Date</th></tr></thead>
+  <tbody>
+  {{- range $d.Refunds}}
+    <tr>
+      <td class="num">{{money .Amount .Currency}}</td>
+      <td><span class="badge {{badge .Status}}">{{.Status}}</span>{{with .FailureReason}} <span class="muted">{{.}}</span>{{end}}</td>
+      <td>{{with .Reason}}{{.}}{{end}}</td>
+      <td class="mono muted">{{.ID}}</td>
+      <td class="num muted">{{date .Created}}</td>
+    </tr>
+  {{- else}}
+    <tr><td colspan="5" class="muted">No refunds.</td></tr>
+  {{- end}}
+  </tbody>
+</table>
+{{- end}}

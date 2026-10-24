@@ -1,0 +1,13 @@
+{{define "content" -}}
+<section class="panel login">
+  <h1>Sign in to your dashboard</h1>
+  <form method="post" action="/dashboard/login" hx-boost="false">
+    <input type="hidden" name="csrf_token" value="{{.Data.Token}}">
+    <label for="email">Email</label>
+    <input id="email" name="email" type="email" autocomplete="username" value="{{.Data.Email}}" required autofocus>
+    <label for="password">Password</label>
+    <input id="password" name="password" type="password" autocomplete="current-password" required>
+    <button type="submit">Sign in</button>
+  </form>
+</section>
+{{- end}}

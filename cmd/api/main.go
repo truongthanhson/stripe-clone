@@ -18,6 +18,7 @@ import (
 	"github.com/truongthanhson/stripe-clone/internal/cardnetwork"
 	"github.com/truongthanhson/stripe-clone/internal/checkout"
 	"github.com/truongthanhson/stripe-clone/internal/customer"
+	"github.com/truongthanhson/stripe-clone/internal/dashboard"
 	"github.com/truongthanhson/stripe-clone/internal/idempotency"
 	"github.com/truongthanhson/stripe-clone/internal/ledger"
 	"github.com/truongthanhson/stripe-clone/internal/paymentintent"
@@ -56,18 +57,21 @@ func run(logger *slog.Logger) error {
 	idem := idempotency.NewStore(pool)
 	go pruneIdempotencyKeys(logger, idem)
 	intents := paymentintent.NewService(paymentintent.NewStore(pool), network, networkTimeout, logger)
+	keys := apikey.NewStore(pool)
 
 	srv := &http.Server{
 		Addr: addr,
 		Handler: withRequestLogging(logger, newRouter(app{
 			db:        pool,
-			keys:      apikey.NewStore(pool),
+			keys:      keys,
 			intents:   intents,
 			refunds:   refund.NewService(pool, network, networkTimeout, logger),
 			customers: customer.NewStore(pool),
 			balances:  ledger.NewReader(pool),
 			idem:      idem,
 			checkout:  checkout.NewService(pool, intents),
+			dashboard: dashboard.NewStore(pool),
+			keyAdmin:  keys,
 			publicURL: getenv("PUBLIC_URL", "http://localhost"+addr),
 		})),
 		ReadHeaderTimeout: 5 * time.Second,
@@ -126,6 +130,8 @@ type app struct {
 	customers customerStore
 	idem      idempotencyStore // nil disables Idempotency-Key handling
 	checkout  checkoutStore
+	dashboard dashboardAuth
+	keyAdmin  keyManager
 	publicURL string // where browsers reach this server, for hosted page links
 }
 
@@ -187,7 +193,8 @@ func pageRoutes(a app) []route {
 
 func newRouter(a app) http.Handler {
 	mux := http.NewServeMux()
-	for _, rt := range append(routes(a), pageRoutes(a)...) {
+	all := append(routes(a), pageRoutes(a)...)
+	for _, rt := range append(all, dashboardRoutes(a)...) {
 		mux.Handle(rt.pattern, rt.handler)
 	}
 	return mux
