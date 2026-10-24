@@ -17,6 +17,7 @@ import (
 	"github.com/truongthanhson/stripe-clone/internal/cardnetwork"
 	"github.com/truongthanhson/stripe-clone/internal/checkout"
 	"github.com/truongthanhson/stripe-clone/internal/customer"
+	"github.com/truongthanhson/stripe-clone/internal/dashboard"
 	"github.com/truongthanhson/stripe-clone/internal/idempotency"
 	"github.com/truongthanhson/stripe-clone/internal/ledger"
 	"github.com/truongthanhson/stripe-clone/internal/paymentintent"
@@ -74,6 +75,8 @@ func newE2EAtVersion(t *testing.T, version string) e2e {
 			balances:  ledger.NewReader(pool),
 			idem:      idempotency.NewStore(pool),
 			checkout:  checkout.NewService(pool, intents),
+			dashboard: dashboard.NewStore(pool),
+			keyAdmin:  keys,
 			publicURL: "https://pay.example.test",
 		})))),
 		testKey:          issue(acme, apikey.ModeTest),

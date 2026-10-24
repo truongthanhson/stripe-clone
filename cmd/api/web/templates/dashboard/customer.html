@@ -1,0 +1,20 @@
+{{define "content" -}}
+{{- $c := .Data.Customer}}
+<p class="crumb"><a href="/dashboard/customers">Customers</a></p>
+<h1>{{with $c.Name}}{{.}}{{else}}Customer{{end}}{{if $c.Deleted}} <span class="badge neutral">deleted</span>{{end}}</h1>
+<p class="mono muted">{{$c.ID}}</p>
+{{- if not $c.Deleted}}
+<section class="panel">
+  <dl class="kv">
+    <dt>Email</dt><dd>{{with $c.Email}}{{.}}{{else}}<span class="muted">None</span>{{end}}</dd>
+    <dt>Description</dt><dd>{{with $c.Description}}{{.}}{{else}}<span class="muted">None</span>{{end}}</dd>
+    <dt>Created</dt><dd>{{date $c.Created}}</dd>
+    {{- range $k, $v := $c.Metadata}}
+    <dt class="mono">{{$k}}</dt><dd>{{$v}}</dd>
+    {{- end}}
+  </dl>
+</section>
+{{- end}}
+<h2>Payments</h2>
+{{template "payment_table" .Data.Payments}}
+{{- end}}

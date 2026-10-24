@@ -1,0 +1,26 @@
+{{define "content" -}}
+<h1>Balance</h1>
+{{template "balance_cards" .Data.Balances}}
+<p class="muted">Pending money becomes available for payout once payouts exist; until then everything stays pending.</p>
+<h2>Balance transactions</h2>
+<table class="list">
+  <thead><tr><th>Type</th><th class="num">Amount</th><th class="num">Fee</th><th class="num">Net</th><th>Source</th><th class="num">Date</th></tr></thead>
+  <tbody id="rows">
+  {{- range .Data.Transactions.Items}}
+    <tr>
+      <td>{{.Type}}</td>
+      <td class="num">{{money .Amount .Currency}}</td>
+      <td class="num muted">{{money .Fee .Currency}}</td>
+      <td class="num">{{money .Net .Currency}}</td>
+      <td class="mono">{{if eq .Type "charge"}}<a href="/dashboard/payments/{{.Source}}">{{.Source}}</a>{{else}}{{.Source}}{{end}}</td>
+      <td class="num muted">{{date .Created}}</td>
+    </tr>
+  {{- else}}
+    <tr><td colspan="6" class="muted">No balance transactions yet.</td></tr>
+  {{- end}}
+  {{- with .Data.Transactions.Next}}
+    <tr id="more"><td colspan="6"><a href="?starting_after={{.}}" hx-get="?starting_after={{.}}" hx-select="#rows > tr" hx-target="#more" hx-swap="outerHTML" hx-push-url="false">Load more</a></td></tr>
+  {{- end}}
+  </tbody>
+</table>
+{{- end}}

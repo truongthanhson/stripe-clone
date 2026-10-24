@@ -122,6 +122,22 @@ Open the `url` in a browser and pay with a test card number from the table below
 any CVC). Links use `PUBLIC_URL` (default `http://localhost:$PORT`); set it to the address browsers
 reach the server on. A session expires after 24 hours (`expires_at` can shorten that).
 
+## Dashboard
+
+Merchants sign in at `/dashboard` with their email and a password. Set the password from the command line
+(it is read from stdin, so it stays out of shell history):
+
+```sh
+read -s PW && echo "$PW" | go run ./cmd/admin set-password -merchant 1
+open http://localhost:8080/dashboard
+```
+
+It shows payments (capture, cancel and refund them), customers, the balance with its transactions,
+and API keys (create and revoke). Test and live data are kept apart; the switch in the header flips
+between them. Five wrong passwords lock sign-in for 15 minutes. Pages are server-rendered with
+`html/template`; htmx (served from `/static`) makes navigation and "Load more" swap in place,
+and every page still works with JavaScript off.
+
 ## API versions
 
 Each merchant is pinned to the API version that was current when they were created, so later breaking

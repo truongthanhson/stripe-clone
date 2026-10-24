@@ -5,21 +5,27 @@
 //	admin create-merchant -name NAME -email EMAIL
 //	admin issue-key -merchant ID -mode test|live
 //	admin set-api-version -merchant ID -version YYYY-MM-DD
+//	admin set-password -merchant ID    (reads the password from stdin)
 package main
 
 import (
+	"bufio"
 	"context"
 	"errors"
 	"flag"
 	"fmt"
+	"io"
 	"os"
+	"strings"
 
 	"github.com/jackc/pgx/v5/pgxpool"
 
 	"github.com/truongthanhson/stripe-clone/internal/apikey"
+	"github.com/truongthanhson/stripe-clone/internal/dashboard"
 )
 
-const usage = "usage: admin create-merchant -name NAME -email EMAIL | admin issue-key -merchant ID -mode test|live | admin set-api-version -merchant ID -version YYYY-MM-DD"
+const usage = "usage: admin create-merchant -name NAME -email EMAIL | admin issue-key -merchant ID -mode test|live | " +
+	"admin set-api-version -merchant ID -version YYYY-MM-DD | admin set-password -merchant ID < password"
 
 func main() {
 	if err := run(context.Background(), os.Args[1:]); err != nil {
@@ -97,6 +103,26 @@ func run(ctx context.Context, args []string) error {
 			return err
 		}
 		fmt.Printf("merchant %d pinned to API version %s\n", *merchantID, *version)
+		return nil
+
+	case "set-password":
+		fs := flag.NewFlagSet("set-password", flag.ContinueOnError)
+		merchantID := fs.Int64("merchant", 0, "merchant id")
+		if err := fs.Parse(args[1:]); err != nil {
+			return err
+		}
+		if *merchantID == 0 {
+			return errors.New("-merchant is required")
+		}
+		// From stdin, not a flag, so the password stays out of shell history and the process list.
+		line, err := bufio.NewReader(os.Stdin).ReadString('\n')
+		if err != nil && !errors.Is(err, io.EOF) {
+			return err
+		}
+		if err := dashboard.NewStore(pool).SetPassword(ctx, *merchantID, strings.TrimRight(line, "\r\n")); err != nil {
+			return err
+		}
+		fmt.Printf("dashboard password set for merchant %d\n", *merchantID)
 		return nil
 
 	default:

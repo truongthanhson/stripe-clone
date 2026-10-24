@@ -1,0 +1,37 @@
+{{define "content" -}}
+{{- $csrf := .Session.CSRFToken}}{{$mode := "test"}}{{if .Session.Livemode}}{{$mode = "live"}}{{end}}
+<h1>API keys</h1>
+{{- with .Data.NewSecret}}
+<section class="panel secret">
+  <h2>Your new {{$mode}} secret key</h2>
+  <p>Copy it now. Only a hash is stored, so it cannot be shown again.</p>
+  <code class="key">{{.}}</code>
+</section>
+{{- end}}
+<table class="list">
+  <thead><tr><th>Key</th><th>Status</th><th class="num">Created</th><th></th></tr></thead>
+  <tbody>
+  {{- range .Data.Keys}}
+    <tr>
+      <td class="mono">{{.Prefix}}…</td>
+      <td>{{if .RevokedAt}}<span class="badge neutral">revoked {{date .RevokedAt}}</span>{{else}}<span class="badge ok">active</span>{{end}}</td>
+      <td class="num muted">{{date .Created}}</td>
+      <td class="num">
+        {{- if not .RevokedAt}}
+        <form method="post" action="/dashboard/apikeys/{{.ID}}/revoke" hx-confirm="Revoke {{.Prefix}}…? Requests using it will fail from now on.">
+          <input type="hidden" name="csrf_token" value="{{$csrf}}">
+          <button type="submit" class="link danger">Revoke</button>
+        </form>
+        {{- end}}
+      </td>
+    </tr>
+  {{- else}}
+    <tr><td colspan="4" class="muted">No {{$mode}} keys yet.</td></tr>
+  {{- end}}
+  </tbody>
+</table>
+<form method="post" action="/dashboard/apikeys" class="inline-form">
+  <input type="hidden" name="csrf_token" value="{{$csrf}}">
+  <button type="submit">Create {{$mode}} key</button>
+</form>
+{{- end}}
