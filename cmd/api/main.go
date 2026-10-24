@@ -76,6 +76,7 @@ func run(logger *slog.Logger) error {
 	// webhooks on localhost.
 	dispatcher := webhook.NewDispatcher(pool, logger, os.Getenv("WEBHOOKS_ALLOW_PRIVATE_NETWORKS") == "true")
 	go dispatcher.Run(ctx, time.Second)
+	go a.resolver.run(ctx, logger, 5*time.Second)
 
 	errCh := make(chan error, 1)
 	go func() {
@@ -126,6 +127,7 @@ func buildApp(pool *pgxpool.Pool, network cardnetwork.Network, timeout time.Dura
 		endpoints: webhook.NewStore(pool),
 		dashboard: dashboard.NewStore(pool),
 		keyAdmin:  keys,
+		resolver:  resolver{intents: intents, refunds: refunds, grace: 2 * timeout},
 		publicURL: publicURL,
 	}
 }
@@ -160,6 +162,7 @@ type app struct {
 	endpoints endpointStore
 	dashboard dashboardAuth
 	keyAdmin  keyManager
+	resolver  resolver
 	publicURL string // where browsers reach this server, for hosted page links
 }
 

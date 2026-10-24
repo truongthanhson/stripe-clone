@@ -156,3 +156,30 @@ func (f *Fake) Stats() Stats {
 	}
 	return s
 }
+
+// Hold is one authorization as the fake bank sees it, for tests that compare the bank with our books.
+type Hold struct {
+	Reference       string
+	AuthorizationID string
+	Approved        bool
+	Amount          int64
+	Captured        int64 // 0 unless captured
+	Refunded        int64
+	Voided          bool
+}
+
+// Holds lists every authorization the fake has answered, approved or not.
+func (f *Fake) Holds() []Hold {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	out := make([]Hold, 0, len(f.byReference))
+	for ref, h := range f.byReference {
+		hold := Hold{Reference: ref, AuthorizationID: h.auth.ID, Approved: h.auth.Approved, Amount: h.amount,
+			Refunded: h.refunded, Voided: h.state == holdVoided}
+		if h.state == holdCaptured {
+			hold.Captured = h.captured
+		}
+		out = append(out, hold)
+	}
+	return out
+}

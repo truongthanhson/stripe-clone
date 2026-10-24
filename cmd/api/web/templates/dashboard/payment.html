@@ -67,6 +67,9 @@
       <button type="submit" class="secondary" hx-disabled-elt="this">Cancel payment</button>
     </form>
     {{- end}}
+    {{- with $pi.Unresolved}}
+    <p class="muted">The bank did not answer the last {{.Op}}, so its outcome is unknown. It is being asked again; until then only that same {{.Op}} can be retried.</p>
+    {{- end}}
     {{- if eq $pi.Status "processing"}}
     <p class="muted">The bank has not answered yet, so the outcome is unknown. Nothing can be done until it settles.</p>
     {{- else if not (or (eq $pi.Status "requires_capture") (gt $d.Refundable 0) $d.Cancelable)}}

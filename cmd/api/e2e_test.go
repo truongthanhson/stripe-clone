@@ -22,17 +22,21 @@ import (
 // e2e is the real router over a real Postgres, with keys for two merchants.
 type e2e struct {
 	network          *cardnetwork.Fake
+	resolver         resolver
 	pool             *pgxpool.Pool
 	handler          http.Handler
 	testKey, liveKey string
 	otherMerchantKey string
 }
 
-func newE2E(t *testing.T) e2e { return newE2EAtVersion(t, "") }
+func newE2E(t *testing.T) e2e { return newE2EWith(t, "", nil) }
 
-// newE2EAtVersion sends every request with Stripe-Version: version (none when empty), which is how
-// an integration written against an older version talks to today's server.
-func newE2EAtVersion(t *testing.T, version string) e2e {
+func newE2EAtVersion(t *testing.T, version string) e2e { return newE2EWith(t, version, nil) }
+
+// newE2EWith sends every request with Stripe-Version: version (none when empty), which is how
+// an integration written against an older version talks to today's server. link, when set, stands
+// between the server and the fake bank, as a lossy network does in the recovery test.
+func newE2EWith(t *testing.T, version string, link func(cardnetwork.Network) cardnetwork.Network) e2e {
 	t.Helper()
 	ctx := context.Background()
 	pool := testdb.New(t)
@@ -56,10 +60,15 @@ func newE2EAtVersion(t *testing.T, version string) e2e {
 
 	logger := slog.New(slog.NewJSONHandler(io.Discard, nil))
 	network := cardnetwork.NewFake()
-	a := buildApp(pool, network, 200*time.Millisecond, logger, "https://pay.example.test")
+	var bank cardnetwork.Network = network
+	if link != nil {
+		bank = link(network)
+	}
+	a := buildApp(pool, bank, 200*time.Millisecond, logger, "https://pay.example.test")
 	return e2e{
 		network:          network,
 		pool:             pool,
+		resolver:         a.resolver,
 		handler:          withVersionHeader(version, withContractCheck(t, withRequestLogging(logger, newRouter(a)))),
 		testKey:          issue(acme, apikey.ModeTest),
 		liveKey:          issue(acme, apikey.ModeLive),

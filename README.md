@@ -81,6 +81,12 @@ curl "localhost:8080/v1/refunds?payment_intent=pi_..." -H "Authorization: Bearer
 A declined card returns `402` with `{"error": {"type": "card_error", "code": "card_declined", "decline_code": ..., "payment_intent": {...}}}`;
 the PaymentIntent goes back to `requires_payment_method` and can be confirmed again with another card.
 
+When the card network does not answer, the outcome is unknown and the API says so instead of guessing:
+a charge stays `processing`, a refund stays `pending`, and a capture or cancel returns `502`. A background
+resolver repeats the same (idempotent) call until the bank answers and then records the real outcome.
+Until then, only that same capture or cancel may be retried (anything else gets `409 payment_intent_outcome_pending`).
+See [docs/design/phase-3-webhooks.md](docs/design/phase-3-webhooks.md).
+
 Every POST accepts an `Idempotency-Key` header. A retry with the same key and parameters within 24 hours
 returns the first response (with `Idempotent-Replayed: true`) instead of doing the work twice; the same key
 with different parameters is rejected.
@@ -99,7 +105,7 @@ from the card behind it.
 | `pm_card_chargeDeclinedExpiredCard` | `4000 0000 0000 0069` | Declined, `expired_card` |
 | `pm_card_chargeDeclinedIncorrectCvc` | `4000 0000 0000 0127` | Declined, `incorrect_cvc` |
 | `pm_card_chargeDeclinedProcessingError` | `4000 0000 0000 0119` | Declined, `processing_error` |
-| `pm_card_timeout` | `4000 0000 0000 9003` | The network approves but its answer never arrives (outcome unknown) |
+| `pm_card_timeout` | `4000 0000 0000 9003` | The network approves but its answer never arrives: `processing` until the resolver asks again (within seconds) |
 | `pm_card_refundFail` | `4000 0000 0000 5126` | Charges normally; every refund is refused by the issuer |
 
 ## Hosted checkout
@@ -190,7 +196,8 @@ The gate tests are the ones that prove the big guarantees: `TestE2EPhase1Gate` (
 of one payment charge the card once), `TestE2EPhase2Gate` (thousands of random charges, captures
 and refunds keep the ledger balanced; `GATE_SEED` and `GATE_OPS` replay or scale a run) and
 `TestE2EWebhooksGate` (a receiver that fails a third of the time still processes every event exactly
-once by id, in order).
+once by id, in order) and `TestE2EPhase3Gate` (with 40% of bank messages lost, every payment and refund
+settles and the books match the bank to the cent).
 
 ### Smoke test a running server
 

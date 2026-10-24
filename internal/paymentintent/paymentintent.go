@@ -77,6 +77,24 @@ type PaymentIntent struct {
 	LastPaymentError   *PaymentError
 	CanceledAt         *time.Time
 	CancellationReason *string
+
+	// Unresolved is set while a card network call's outcome is unknown: it timed out, and the money
+	// may or may not have moved. The resolver repeats the call to find out.
+	Unresolved *Unresolved
+}
+
+type Op string
+
+const (
+	OpAuthorize Op = "authorize"
+	OpCapture   Op = "capture"
+	OpVoid      Op = "void"
+)
+
+type Unresolved struct {
+	Op     Op
+	Amount int64 // for a capture: how much was being captured
+	Since  time.Time
 }
 
 // PaymentError explains why the last confirmation failed, e.g. a declined card.
@@ -131,6 +149,20 @@ func (e *DeclineError) Error() string { return e.Intent.LastPaymentError.Message
 // ErrNetworkUnavailable means the card network did not answer a capture or void. Both are
 // idempotent on the network side, so the client can simply retry.
 var ErrNetworkUnavailable = errors.New("the card network did not respond; retry the request")
+
+// PendingError means an earlier capture or cancel got no answer from the card network and is being
+// confirmed; until then only that same call may be repeated.
+type PendingError struct {
+	Op     Op
+	Amount int64
+}
+
+func (e *PendingError) Error() string {
+	if e.Op == OpCapture {
+		return fmt.Sprintf("An earlier capture of %d is still being confirmed with the card network. Retry that capture, or wait for it to settle.", e.Amount)
+	}
+	return fmt.Sprintf("An earlier %s of this PaymentIntent is still being confirmed with the card network. Retry it, or wait for it to settle.", e.Op)
+}
 
 // ValidationError names the request parameter that is wrong, so the API can report it.
 type ValidationError struct {
