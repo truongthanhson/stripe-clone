@@ -3,10 +3,16 @@ package paymentintent_test
 import (
 	"context"
 	"errors"
+	"io"
+	"log/slog"
 	"reflect"
 	"testing"
+	"time"
+
+	"github.com/jackc/pgx/v5"
 
 	"github.com/truongthanhson/stripe-clone/internal/apikey"
+	"github.com/truongthanhson/stripe-clone/internal/cardnetwork"
 	"github.com/truongthanhson/stripe-clone/internal/paymentintent"
 	"github.com/truongthanhson/stripe-clone/internal/testdb"
 )
@@ -76,4 +82,54 @@ func TestStore(t *testing.T) {
 			t.Fatal("insert with amount 0 succeeded")
 		}
 	})
+}
+
+// A hook writes in the change's transaction, so a failing hook must undo the change: this is what
+// makes an event exist exactly when its change does.
+func TestHookFailureRollsBackTheChange(t *testing.T) {
+	ctx := context.Background()
+	pool := testdb.New(t)
+	merchant, err := apikey.NewStore(pool).CreateMerchant(ctx, "Acme", "ops@acme.test")
+	if err != nil {
+		t.Fatal(err)
+	}
+	store := paymentintent.NewStore(pool)
+	var seen []paymentintent.Status
+	fail := false
+	store.OnChange(func(_ context.Context, _ pgx.Tx, pi paymentintent.PaymentIntent, from paymentintent.Status) error {
+		if fail {
+			return errors.New("hook failed")
+		}
+		seen = append(seen, from, pi.Status)
+		return nil
+	})
+	svc := paymentintent.NewService(store, cardnetwork.NewFake(), time.Second, slog.New(slog.NewTextHandler(io.Discard, nil)))
+
+	pi, err := svc.Create(ctx, merchant, false, paymentintent.CreateParams{Amount: 2000, Currency: "usd", CaptureMethod: paymentintent.CaptureManual})
+	if err != nil {
+		t.Fatal(err)
+	}
+	pm := "pm_card_visa"
+	if _, err := svc.Confirm(ctx, merchant, false, pi.ID, &pm); err != nil {
+		t.Fatal(err)
+	}
+	want := []paymentintent.Status{"", "requires_payment_method", "requires_payment_method", "processing", "processing", "requires_capture"}
+	if !reflect.DeepEqual(seen, want) {
+		t.Fatalf("hook saw %v, want %v", seen, want)
+	}
+
+	fail = true
+	if _, err := svc.Cancel(ctx, merchant, false, pi.ID, nil); err == nil {
+		t.Fatal("cancel succeeded although its hook failed")
+	}
+	if got, _ := svc.Get(ctx, merchant, false, pi.ID); got.Status != paymentintent.StatusRequiresCapture {
+		t.Fatalf("status = %s after a failed hook, want requires_capture", got.Status)
+	}
+	if _, err := svc.Create(ctx, merchant, false, paymentintent.CreateParams{Amount: 2000, Currency: "usd"}); err == nil {
+		t.Fatal("create succeeded although its hook failed")
+	}
+	var n int
+	if err := pool.QueryRow(ctx, `SELECT count(*) FROM payment_intents`).Scan(&n); err != nil || n != 1 {
+		t.Fatalf("%d payment intents (%v), want 1", n, err)
+	}
 }

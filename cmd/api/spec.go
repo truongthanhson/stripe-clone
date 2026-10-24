@@ -8,6 +8,7 @@ import (
 	"mime"
 	"net/http"
 	"net/url"
+	"regexp"
 	"slices"
 	"strconv"
 	"strings"
@@ -133,7 +134,20 @@ func validateForm(op *openapi3.Operation, form url.Values) *apiError {
 		}
 		prop := schema.Properties[base].Value
 		isObject := prop.Type.Is(openapi3.TypeObject)
+		isArray := prop.Type.Is(openapi3.TypeArray)
 		switch {
+		case isArray && !isHash:
+			return &apiError{Type: "invalid_request_error", Code: "parameter_invalid", Param: name,
+				Message: "Invalid " + name + ": send it as " + name + "[]=value, once per value."}
+		case isArray:
+			if !arrayIndex.MatchString(name[len(base):]) {
+				return unknownParam(name)
+			}
+			for _, v := range form[name] {
+				if apiErr := checkValue(base, v, prop.Items.Value); apiErr != nil {
+					return apiErr
+				}
+			}
 		case isHash && !isObject:
 			return unknownParam(name)
 		case isHash:
@@ -158,6 +172,9 @@ func validateForm(op *openapi3.Operation, form url.Values) *apiError {
 	}
 	return nil
 }
+
+// arrayIndex matches the part after an array parameter's name: "[]" or "[0]".
+var arrayIndex = regexp.MustCompile(`^\[\d*\]$`)
 
 // hashBase splits "metadata[order_id]" into ("metadata", true).
 func hashBase(name string) (string, bool) {

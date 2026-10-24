@@ -122,6 +122,26 @@ Open the `url` in a browser and pay with a test card number from the table below
 any CVC). Links use `PUBLIC_URL` (default `http://localhost:$PORT`); set it to the address browsers
 reach the server on. A session expires after 24 hours (`expires_at` can shorten that).
 
+## Events and webhooks
+
+Every change worth reacting to is recorded as an event (`payment_intent.succeeded`, `refund.failed`,
+`checkout.session.completed`, ...), in the same database transaction as the change itself. Read them
+from the API, or register a URL and have them POSTed to you:
+
+```sh
+curl "localhost:8080/v1/events?type=payment_intent.*" -H "Authorization: Bearer sk_test_..."
+curl localhost:8080/v1/webhook_endpoints -H "Authorization: Bearer sk_test_..." \
+  -d url=https://shop.example/hooks -d "enabled_events[]=payment_intent.succeeded" -d "enabled_events[]=refund.updated"
+# {"id": "we_...", "secret": "whsec_...", ...}   the secret is shown only in this response
+```
+
+Each delivery carries `Stripe-Signature: t=<unix seconds>,v1=<hex HMAC-SHA256 of "<t>.<body>" keyed with the secret>`.
+Check it and reject timestamps older than five minutes (`webhook.Verify` does both). Answer 2xx to acknowledge;
+anything else is retried with backoff (1 minute, 5 minutes, 30 minutes, 2 hours, 5 hours, 10 hours, then
+every 12 hours) for up to 3 days. Delivery is at least once, so a receiver must deduplicate on the event id.
+An endpoint gets its events in the order they happened. Webhooks to private or loopback addresses are
+refused; set `WEBHOOKS_ALLOW_PRIVATE_NETWORKS=true` to receive them on localhost while developing.
+
 ## Dashboard
 
 Merchants sign in at `/dashboard` with their email and a password. Set the password from the command line
@@ -167,8 +187,10 @@ go test ./...   # the migrations test starts its own Postgres via testcontainers
 ```
 
 The gate tests are the ones that prove the big guarantees: `TestE2EPhase1Gate` (50 concurrent retries
-of one payment charge the card once) and `TestE2EPhase2Gate` (thousands of random charges, captures
-and refunds keep the ledger balanced; `GATE_SEED` and `GATE_OPS` replay or scale a run).
+of one payment charge the card once), `TestE2EPhase2Gate` (thousands of random charges, captures
+and refunds keep the ledger balanced; `GATE_SEED` and `GATE_OPS` replay or scale a run) and
+`TestE2EWebhooksGate` (a receiver that fails a third of the time still processes every event exactly
+once by id, in order).
 
 ### Smoke test a running server
 

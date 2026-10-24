@@ -19,10 +19,12 @@ import (
 	"github.com/truongthanhson/stripe-clone/internal/checkout"
 	"github.com/truongthanhson/stripe-clone/internal/customer"
 	"github.com/truongthanhson/stripe-clone/internal/dashboard"
+	"github.com/truongthanhson/stripe-clone/internal/events"
 	"github.com/truongthanhson/stripe-clone/internal/idempotency"
 	"github.com/truongthanhson/stripe-clone/internal/ledger"
 	"github.com/truongthanhson/stripe-clone/internal/paymentintent"
 	"github.com/truongthanhson/stripe-clone/internal/refund"
+	"github.com/truongthanhson/stripe-clone/internal/webhook"
 )
 
 func main() {
@@ -54,26 +56,13 @@ func run(logger *slog.Logger) error {
 	// The in-process fake is the only card network until a processor adapter exists; live mode
 	// refuses to confirm, so it only ever moves test money.
 	network := cardnetwork.NewFake()
-	idem := idempotency.NewStore(pool)
-	go pruneIdempotencyKeys(logger, idem)
-	intents := paymentintent.NewService(paymentintent.NewStore(pool), network, networkTimeout, logger)
-	keys := apikey.NewStore(pool)
+	publicURL := getenv("PUBLIC_URL", "http://localhost"+addr)
+	a := buildApp(pool, network, networkTimeout, logger, publicURL)
+	go pruneIdempotencyKeys(logger, idempotency.NewStore(pool))
 
 	srv := &http.Server{
-		Addr: addr,
-		Handler: withRequestLogging(logger, newRouter(app{
-			db:        pool,
-			keys:      keys,
-			intents:   intents,
-			refunds:   refund.NewService(pool, network, networkTimeout, logger),
-			customers: customer.NewStore(pool),
-			balances:  ledger.NewReader(pool),
-			idem:      idem,
-			checkout:  checkout.NewService(pool, intents),
-			dashboard: dashboard.NewStore(pool),
-			keyAdmin:  keys,
-			publicURL: getenv("PUBLIC_URL", "http://localhost"+addr),
-		})),
+		Addr:              addr,
+		Handler:           withRequestLogging(logger, newRouter(a)),
 		ReadHeaderTimeout: 5 * time.Second,
 		ReadTimeout:       10 * time.Second,
 		WriteTimeout:      10 * time.Second,
@@ -82,6 +71,11 @@ func run(logger *slog.Logger) error {
 
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer stop()
+
+	// Private addresses are refused unless asked for, which local development needs to receive
+	// webhooks on localhost.
+	dispatcher := webhook.NewDispatcher(pool, logger, os.Getenv("WEBHOOKS_ALLOW_PRIVATE_NETWORKS") == "true")
+	go dispatcher.Run(ctx, time.Second)
 
 	errCh := make(chan error, 1)
 	go func() {
@@ -102,6 +96,38 @@ func run(logger *slog.Logger) error {
 	shutdownCtx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
 	defer cancel()
 	return srv.Shutdown(shutdownCtx)
+}
+
+// buildApp wires the stores and services, including the hooks that record events in the same
+// transaction as the changes they describe. The tests build their app with it too.
+func buildApp(pool *pgxpool.Pool, network cardnetwork.Network, timeout time.Duration, logger *slog.Logger, publicURL string) app {
+	store := paymentintent.NewStore(pool)
+	intents := paymentintent.NewService(store, network, timeout, logger)
+	co := checkout.NewService(pool, intents)
+	refunds := refund.NewService(pool, network, timeout, logger)
+	keys := apikey.NewStore(pool)
+
+	// Checkout first: its session update takes a row lock, and events.Record must take its lock last.
+	store.OnChange(co.IntentChanged)
+	store.OnChange(recordIntentEvent)
+	refunds.OnChange(recordRefundEvent)
+	co.OnChange(recordCheckoutEvent(publicURL))
+
+	return app{
+		db:        pool,
+		keys:      keys,
+		intents:   intents,
+		refunds:   refunds,
+		customers: customer.NewStore(pool),
+		balances:  ledger.NewReader(pool),
+		idem:      idempotency.NewStore(pool),
+		checkout:  co,
+		events:    events.NewStore(pool),
+		endpoints: webhook.NewStore(pool),
+		dashboard: dashboard.NewStore(pool),
+		keyAdmin:  keys,
+		publicURL: publicURL,
+	}
 }
 
 // pruneIdempotencyKeys deletes expired keys hourly so the table stays small.
@@ -130,6 +156,8 @@ type app struct {
 	customers customerStore
 	idem      idempotencyStore // nil disables Idempotency-Key handling
 	checkout  checkoutStore
+	events    eventStore
+	endpoints endpointStore
 	dashboard dashboardAuth
 	keyAdmin  keyManager
 	publicURL string // where browsers reach this server, for hosted page links
@@ -178,6 +206,13 @@ func routes(a app) []route {
 		{"GET /v1/checkout/sessions/{id}", authed(handleGetCheckoutSession(a.checkout, a.publicURL))},
 		{"GET /v1/checkout/sessions/{id}/line_items", authed(handleListCheckoutLineItems(a.checkout))},
 		{"POST /v1/checkout/sessions/{id}/expire", authedPost(handleExpireCheckoutSession(a.checkout, a.publicURL))},
+		{"GET /v1/events", authed(handleListEvents(a.events))},
+		{"GET /v1/events/{id}", authed(handleGetEvent(a.events))},
+		{"POST /v1/webhook_endpoints", authedPost(handleCreateEndpoint(a.endpoints))},
+		{"GET /v1/webhook_endpoints", authed(handleListEndpoints(a.endpoints))},
+		{"GET /v1/webhook_endpoints/{id}", authed(handleGetEndpoint(a.endpoints))},
+		{"POST /v1/webhook_endpoints/{id}", authedPost(handleUpdateEndpoint(a.endpoints))},
+		{"DELETE /v1/webhook_endpoints/{id}", authed(handleDeleteEndpoint(a.endpoints))},
 	}
 }
 
