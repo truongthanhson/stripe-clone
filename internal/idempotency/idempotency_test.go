@@ -4,6 +4,8 @@ import (
 	"bytes"
 	"context"
 	"errors"
+	"fmt"
+	"sync"
 	"testing"
 
 	"github.com/truongthanhson/stripe-clone/internal/apikey"
@@ -119,6 +121,63 @@ func TestStore(t *testing.T) {
 		}
 		if resp, err := begin(sc, fp); resp != nil || err != nil {
 			t.Fatalf("same request = %v, %v; want run", resp, err)
+		}
+	})
+
+	// Many requests race for a key that may be taken over. Postgres serialises them on the row
+	// lock and re-checks the WHERE against the row the winner wrote, so the takeover must leave
+	// a row that no longer qualifies: created_at and locked_at are reset to now().
+	race := func(t *testing.T, sc idempotency.Scope, fps func(i int) []byte) {
+		t.Helper()
+		const n = 16
+		start := make(chan struct{})
+		var wg sync.WaitGroup
+		var mu sync.Mutex
+		winners := 0
+		for i := range n {
+			wg.Add(1)
+			go func() {
+				defer wg.Done()
+				<-start
+				resp, err := store.Begin(ctx, sc, fps(i))
+				if resp == nil && err == nil {
+					mu.Lock()
+					winners++
+					mu.Unlock()
+				} else if err != nil && !errors.Is(err, idempotency.ErrInProgress) && !errors.Is(err, idempotency.ErrMismatch) {
+					t.Errorf("begin: %v", err)
+				}
+			}()
+		}
+		close(start)
+		wg.Wait()
+		if winners != 1 {
+			t.Fatalf("%d requests claimed the key, want exactly 1", winners)
+		}
+	}
+
+	t.Run("concurrent requests on an expired key: exactly one runs", func(t *testing.T) {
+		for round := range 20 {
+			sc := idempotency.Scope{MerchantID: acme, Key: fmt.Sprintf("expired-%d", round)}
+			_, _ = begin(sc, fp)
+			_ = store.Complete(ctx, sc, idempotency.Response{Status: 200, Body: []byte("{}")})
+			age(sc, "created_at", "25 hours")
+			// Half send the old request, half a new one: an expired key may be reused for anything.
+			race(t, sc, func(i int) []byte {
+				if i%2 == 0 {
+					return fp
+				}
+				return other
+			})
+		}
+	})
+
+	t.Run("concurrent retries of an abandoned in-progress key: exactly one runs", func(t *testing.T) {
+		for round := range 20 {
+			sc := idempotency.Scope{MerchantID: acme, Key: fmt.Sprintf("abandoned-%d", round)}
+			_, _ = begin(sc, fp)
+			age(sc, "locked_at", "2 minutes")
+			race(t, sc, func(int) []byte { return fp })
 		}
 	})
 
